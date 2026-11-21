@@ -507,7 +507,8 @@ function StudentPortal({ onReturn }) {
     setError('');
     return true;
   }
-  useEffect(() => { loadStudent(); }, []);
+  // Do not request protected student data before successful PIN verification.
+  // unlock() calls loadStudent() only after student_unlock succeeds.
   useEffect(() => {
     if(state !== 'running') return;
     const tick=()=>{
