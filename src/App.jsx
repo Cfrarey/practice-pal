@@ -160,7 +160,33 @@ export default function App() {
             <h2>Welcome back!</h2>
             <p>Signed in as:</p>
             <p><strong>{session.user.email}</strong></p>
-            <p>Your family dashboard is coming next.</p>
+      
+            <div style={{
+              background: '#f0f5ff',
+              padding: '16px',
+              borderRadius: '12px',
+              marginBottom: '20px'
+            }}>
+              <h3>🏠 Your Family Dashboard</h3>
+
+              {familyLoading ? (
+                <p>Loading family information...</p>
+              ) : familyError ? (
+                <p style={{ color: '#b91c1c' }}>
+                  Family lookup error: {familyError}
+                </p>
+              ) : (
+                <>
+                  <p>Family memberships found: {familyMembers.length}</p>
+                  <p>
+                    {familyMembers.length === 0
+                      ? 'No family membership found.'
+                      : 'Family membership lookup completed successfully.'}
+                  </p>
+                </>
+              )}
+            </div>
+
             <button style={styles.button} onClick={signOut}>
               Sign Out
             </button>
