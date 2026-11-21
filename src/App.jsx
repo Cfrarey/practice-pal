@@ -1,3 +1,163 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+  ? createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY)
+  : null;
+const studentColumns = 'id,family_id,name,instrument,weekly_goal_minutes,created_at';
+const sessionColumns = 'id,family_id,student_id,practice_date,minutes,category,focus,notes,created_at';
+const instruments = ['Piano','Guitar','Violin','Viola','Cello','Flute','Clarinet','Saxophone','Trumpet','Trombone','French Horn','Drums','Percussion','Voice','Other'];
+const categories = ['Other','Warm-up','Scales','Technique','Repertoire','Sight Reading','Ear Training','Performance Preparation'];
+const palette = { navy:'#172554',blue:'#2563eb',purple:'#7c3aed',bg:'#f3f6ff',gray:'#64748b',border:'#e2e8f0',green:'#15803d',red:'#b91c1c' };
+const style = {
+  page:{minHeight:'100vh',background:palette.bg,color:palette.navy,fontFamily:'Arial,sans-serif',padding:'20px 14px',boxSizing:'border-box'},
+  shell:{maxWidth:1100,margin:'0 auto'},
+  card:{background:'#fff',border:`1px solid ${palette.border}`,borderRadius:18,padding:22,marginBottom:16},
+  button:{background:palette.blue,color:'#fff',border:0,borderRadius:10,padding:'12px 18px',fontSize:15,fontWeight:700,cursor:'pointer'},
+  secondary:{background:'#fff',color:palette.navy,border:`1px solid ${palette.border}`,borderRadius:10,padding:'11px 15px',cursor:'pointer'},
+  input:{display:'block',width:'100%',boxSizing:'border-box',padding:12,marginTop:6,marginBottom:16,border:`1px solid ${palette.border}`,borderRadius:10,fontSize:16,background:'#fff'}
+};
+const blankStudent = {name:'',instrument:'',weekly_goal_minutes:'60'};
+const blankEntry = {student_id:'',practice_date:'',minutes:'',category:'Other',focus:'',notes:''};
+function localDate(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+function parseLocalDate(value) {
+  const [y,m,d] = value.split('-').map(Number);
+  return new Date(y,m-1,d);
+}
+function mondayOf(date = new Date()) {
+  const d = new Date(date.getFullYear(),date.getMonth(),date.getDate());
+  d.setDate(d.getDate() - (d.getDay()+6)%7);
+  return d;
+}
+function sundayOf(monday) {
+  const d = new Date(monday);
+  d.setDate(d.getDate()+6);
+  return d;
+}
+function formatDate(date) {return date.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});}
+function formatClock(seconds) {
+  const n = Math.max(0,Math.floor(seconds));
+  const h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=n%60;
+  const two = v => String(v).padStart(2,'0');
+  return h ? `${two(h)}:${two(m)}:${two(s)}` : `${two(m)}:${two(s)}`;
+}
+function weeklyMinutes(sessions,studentId,monday) {
+  const first=localDate(monday),last=localDate(sundayOf(monday));
+  return sessions.filter(s=>s.student_id===studentId&&s.practice_date>=first&&s.practice_date<=last)
+    .reduce((sum,s)=>sum+Number(s.minutes||0),0);
+}
+function Progress({value,goal}) {
+  const pct=goal>0?Math.min(100,Math.round(value/goal*100)):0;
+  return <div><div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:8}}><span>{value} / {goal} minutes</span><strong>{pct}%</strong></div><div style={{height:11,borderRadius:20,background:palette.border,overflow:'hidden'}}><div style={{width:`${pct}%`,height:'100%',background:palette.purple}}/></div></div>;
+}
+function FormField({label,id,children}) {return <label htmlFor={id} style={{display:'block',fontWeight:600}}>{label}{children}</label>;}
+
+export default function App() {
+  const [session,setSession]=useState(null),[authLoading,setAuthLoading]=useState(true);
+  const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[authError,setAuthError]=useState('');
+  const [familyId,setFamilyId]=useState(null),[familyLoading,setFamilyLoading]=useState(false),[familyError,setFamilyError]=useState('');
+  const [students,setStudents]=useState([]),[sessions,setSessions]=useState([]),[dataLoading,setDataLoading]=useState(false);
+  const [studentError,setStudentError]=useState(''),[sessionError,setSessionError]=useState(''),[notice,setNotice]=useState('');
+  const [tab,setTab]=useState('dashboard'),[busy,setBusy]=useState(false);
+  const [studentForm,setStudentForm]=useState({...blankStudent}),[editingId,setEditingId]=useState(null),[formOpen,setFormOpen]=useState(false);
+  const [manualOpen,setManualOpen]=useState(false),[entry,setEntry]=useState({...blankEntry,practice_date:localDate()});
+  const [selectedStudentId,setSelectedStudentId]=useState(''),[timerMode,setTimerMode]=useState('up'),[targetMinutes,setTargetMinutes]=useState(15);
+  const [timerStatus,setTimerStatus]=useState('idle'),[elapsedSeconds,setElapsedSeconds]=useState(0);
+  const [category,setCategory]=useState('Other'),[focus,setFocus]=useState(''),[notes,setNotes]=useState('');
+  const [reportStudent,setReportStudent]=useState('all'),[reportMonday,setReportMonday]=useState(localDate(mondayOf()));
+  const elapsedMs=useRef(0),startedAt=useRef(null),statusRef=useRef('idle'),secondsRef=useRef(0),savingRef=useRef(false),timerOwner=useRef(null);
+  const userId=session?.user?.id??null;
+  const thisMonday=mondayOf();
+  const reportStart=parseLocalDate(reportMonday);
+  const reportEnd=sundayOf(reportStart);
+  const weekSessions=sessions.filter(s=>s.practice_date>=reportMonday&&s.practice_date<=localDate(reportEnd)&& (reportStudent==='all'||s.student_id===reportStudent));
+  const reportStudents=students.filter(s=>reportStudent==='all'||s.id===reportStudent);
+  const reportTotal=weekSessions.reduce((sum,s)=>sum+Number(s.minutes||0),0);
+  const selectedStudent=students.find(s=>s.id===selectedStudentId);
+  const selectedSessions=sessions.filter(s=>s.student_id===selectedStudentId);
+  const totalGoal=students.reduce((sum,s)=>sum+Number(s.weekly_goal_minutes||0),0);
+  const weeklyTotal=students.reduce((sum,s)=>sum+weeklyMinutes(sessions,s.id,thisMonday),0);
+  const remaining=Math.max(0,targetMinutes*60-elapsedSeconds);
+  const display=timerMode==='down'?formatClock(remaining):formatClock(elapsedSeconds);
+
+  function setStatus(v){statusRef.current=v;setTimerStatus(v);}
+  function resetClock(){elapsedMs.current=0;startedAt.current=null;secondsRef.current=0;setElapsedSeconds(0);timerOwner.current=null;setStatus('idle');}
+  function hasUnsaved(){return statusRef.current!=='idle'&&(secondsRef.current>0||startedAt.current!==null);}
+
+  useEffect(()=>{
+    if(!supabase){setAuthError('Supabase environment variables are missing.');setAuthLoading(false);return;}
+    let active=true;
+    supabase.auth.getSession().then(({data,error})=>{if(!active)return;if(error)setAuthError(error.message);setSession(data.session);setAuthLoading(false);});
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{if(active){setSession(next);setAuthLoading(false);}});
+    return()=>{active=false;subscription.unsubscribe();};
+  },[]);
+  useEffect(()=>{
+    setFamilyId(null);setFamilyError('');setStudents([]);setSessions([]);setSelectedStudentId('');setStudentError('');setSessionError('');setNotice('');setTab('dashboard');setFormOpen(false);setManualOpen(false);resetClock();
+    if(!supabase||!userId){setFamilyLoading(false);return;}
+    let cancelled=false;setFamilyLoading(true);
+    (async()=>{const {data,error}=await supabase.from('family_members').select('family_id').eq('user_id',userId);
+      if(cancelled)return;
+      if(error)setFamilyError(error.message);
+      else if(data?.length!==1)setFamilyError('Expected exactly one family membership.');
+      else setFamilyId(data[0].family_id);
+      setFamilyLoading(false);
+    })();
+    return()=>{cancelled=true;};
+  },[userId]);
+  useEffect(()=>{
+    if(!supabase||!familyId||!userId){setDataLoading(false);return;}
+    let cancelled=false;setDataLoading(true);setStudentError('');setSessionError('');
+    (async()=>{
+      const [a,b]=await Promise.all([
+        supabase.from('students').select(studentColumns).eq('family_id',familyId).order('name'),
+        supabase.from('practice_sessions').select(sessionColumns).eq('family_id',familyId).order('practice_date',{ascending:false}).order('created_at',{ascending:false})
+      ]);
+      if(cancelled)return;
+      if(a.error)setStudentError(a.error.message);else setStudents(a.data??[]);
+      if(b.error)setSessionError(b.error.message);else setSessions(b.data??[]);
+      setDataLoading(false);
+    })();
+    return()=>{cancelled=true;};
+  },[userId,familyId]);
+  useEffect(()=>{if(selectedStudentId&&!students.some(s=>s.id===selectedStudentId))setSelectedStudentId('');},[students,selectedStudentId]);
+  useEffect(()=>{
+    if(timerStatus!=='running')return;
+    function tick(){if(startedAt.current===null)return;
+      const ms=elapsedMs.current+Math.max(0,Date.now()-startedAt.current);
+      if(timerMode==='down'&&ms>=targetMinutes*60000){elapsedMs.current=targetMinutes*60000;startedAt.current=null;secondsRef.current=targetMinutes*60;setElapsedSeconds(targetMinutes*60);setStatus('finished');return;}
+      const secs=Math.floor(ms/1000);secondsRef.current=secs;setElapsedSeconds(secs);
+    }
+    tick();const interval=setInterval(tick,250);return()=>clearInterval(interval);
+  },[timerStatus,timerMode,targetMinutes]);
+  useEffect(()=>{
+    const beforeUnload=e=>{if(hasUnsaved()){e.preventDefault();e.returnValue='';}};
+    window.addEventListener('beforeunload',beforeUnload);return()=>window.removeEventListener('beforeunload',beforeUnload);
+  },[]);
+
+  async function refreshStudents(){const {data,error}=await supabase.from('students').select(studentColumns).eq('family_id',familyId).order('name');if(error){setStudentError(error.message);return false;}setStudents(data??[]);return true;}
+  async function refreshSessions(){const {data,error}=await supabase.from('practice_sessions').select(sessionColumns).eq('family_id',familyId).order('practice_date',{ascending:false}).order('created_at',{ascending:false});if(error){setSessionError(error.message);return false;}setSessions(data??[]);return true;}
+  async function signIn(e){e.preventDefault();if(!supabase)return;setAuthLoading(true);setAuthError('');const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setAuthError(error.message);setAuthLoading(false);}
+  async function signOut(){if(!supabase||savingRef.current)return;if(hasUnsaved()&&!window.confirm('Sign out and discard unsaved practice time?'))return;const {error}=await supabase.auth.signOut();if(error)setAuthError(error.message);}
+
+  function startTimer(){if(!selectedStudentId){setSessionError('Select a student first.');return;}if(statusRef.current!=='idle')return;setSessionError('');setNotice('');elapsedMs.current=0;secondsRef.current=0;setElapsedSeconds(0);startedAt.current=Date.now();timerOwner.current=userId;setStatus('running');}
+  function pauseTimer(){if(statusRef.current!=='running')return;elapsedMs.current+=Math.max(0,Date.now()-startedAt.current);startedAt.current=null;secondsRef.current=Math.floor(elapsedMs.current/1000);setElapsedSeconds(secondsRef.current);setStatus('paused');}
+  function resumeTimer(){if(statusRef.current!=='paused')return;startedAt.current=Date.now();setStatus('running');}
+  function finishTimer(){if(!['running','paused'].includes(statusRef.current))return;if(statusRef.current==='running'){elapsedMs.current+=Math.max(0,Date.now()-startedAt.current);startedAt.current=null;}if(timerMode==='down')elapsedMs.current=Math.min(elapsedMs.current,targetMinutes*60000);secondsRef.current=Math.floor(elapsedMs.current/1000);setElapsedSeconds(secondsRef.current);setStatus('finished');}
+  function resetTimer(){if(savingRef.current)return;if(hasUnsaved()&&!window.confirm('Discard unsaved practice time?'))return;resetClock();setCategory('Other');setFocus('');setNotes('');setSessionError('');}
+
+  async function insertPractice(payload,source){
+    if(!supabase||!familyId||savingRef.current)return false;
+    savingRef.current=true;setBusy(true);setSessionError('');setNotice('');
+    try{
+      const {data,error}=await supabase.from('practice_sessions').insert(payload).select('id');
+      if(error){setSessionError(error.message);return false;}
+      if(data?.length!==1){setSessionError('Save could not be confirmed. Check the practice log before trying again.');return false;}
+      if(source==='timer'){resetClock();setCategory('Other');setFocus('');setNotes('');}
+      if(source==='manual'){setManualOpen(false);setEntry({...blankEntry,practice_date:localDate()});}
+      setNotice(`🎉 ${payload.minutes} minute(s) saved to the practice log!`);
+      await refreshSessions();return true;
     }finally{savingRef.current=false;setBusy(false);}
   }
   async function saveTimer(){
