@@ -61,7 +61,8 @@ export default function App() {
   const [students,setStudents]=useState([]),[sessions,setSessions]=useState([]),[dataLoading,setDataLoading]=useState(false);
   const [studentError,setStudentError]=useState(''),[sessionError,setSessionError]=useState(''),[notice,setNotice]=useState('');
   const [tab,setTab]=useState('dashboard'),[busy,setBusy]=useState(false);
-  const [entryScreen,setEntryScreen]=useState(true);
+  const [screen,setScreen]=useState(() => { try { return sessionStorage.getItem('practice_pal_roster') ? 'splash' : 'family-login'; } catch { return 'family-login'; } });
+  const [transitioning,setTransitioning]=useState(false);
   const [studentForm,setStudentForm]=useState({...blankStudent}),[editingId,setEditingId]=useState(null),[formOpen,setFormOpen]=useState(false);
   const [manualOpen,setManualOpen]=useState(false),[entry,setEntry]=useState({...blankEntry,practice_date:localDate()});
   const [selectedStudentId,setSelectedStudentId]=useState(''),[timerMode,setTimerMode]=useState('up'),[targetMinutes,setTargetMinutes]=useState(15);
@@ -91,7 +92,7 @@ export default function App() {
   useEffect(()=>{
     if(!supabase){setAuthError('Supabase environment variables are missing.');setAuthLoading(false);return;}
     let active=true;
-    supabase.auth.getSession().then(({data,error})=>{if(!active)return;if(error)setAuthError(error.message);setSession(data.session);setAuthLoading(false);});
+    supabase.auth.getSession().then(({data,error})=>{if(!active)return;if(error)setAuthError(error.message);setSession(data.session);if(data.session&&!data.session.user?.is_anonymous)setScreen('parent-dashboard');setAuthLoading(false);});
     const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{if(active){setSession(next);setAuthLoading(false);}});
     return()=>{active=false;subscription.unsubscribe();};
   },[]);
@@ -140,12 +141,55 @@ export default function App() {
 
   async function refreshStudents(){const {data,error}=await supabase.from('students').select(studentColumns).eq('family_id',familyId).order('name');if(error){setStudentError(error.message);return false;}setStudents(data??[]);return true;}
   async function refreshSessions(){const {data,error}=await supabase.from('practice_sessions').select(sessionColumns).eq('family_id',familyId).order('practice_date',{ascending:false}).order('created_at',{ascending:false});if(error){setSessionError(error.message);return false;}setSessions(data??[]);return true;}
-  async function signIn(e){e.preventDefault();if(!supabase)return;setEntryScreen(true);setAuthLoading(true);setAuthError('');const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setAuthError(error.message);setAuthLoading(false);}
-  async function signOut(){if(!supabase||savingRef.current)return;if(hasUnsaved()&&!window.confirm('Sign out and discard unsaved practice time?'))return;const {error}=await supabase.auth.signOut();if(error)setAuthError(error.message);else setEntryScreen(true);}
-
-  function startTimer(){if(!selectedStudentId){setSessionError('Select a student first.');return;}if(statusRef.current!=='idle')return;setSessionError('');setNotice('');elapsedMs.current=0;secondsRef.current=0;setElapsedSeconds(0);startedAt.current=Date.now();timerOwner.current=userId;setStatus('running');}
-  function pauseTimer(){if(statusRef.current!=='running')return;elapsedMs.current+=Math.max(0,Date.now()-startedAt.current);startedAt.current=null;secondsRef.current=Math.floor(elapsedMs.current/1000);setElapsedSeconds(secondsRef.current);setStatus('paused');}
-  function resumeTimer(){if(statusRef.current!=='paused')return;startedAt.current=Date.now();setStatus('running');}
+  // The first family sign-in identifies a family, captures a minimal roster, and
+  // signs out immediately. The splash screen NEVER retains a parent auth session.
+  async function signIn(e){
+    e.preventDefault();if(!supabase||transitioning)return;
+    setTransitioning(true);setAuthError('');
+    try{
+      const {data:login,error:loginError}=await supabase.auth.signInWithPassword({email,password});
+      if(loginError)throw loginError;
+      if(!login?.user||login.user.is_anonymous)throw new Error('A parent account is required.');
+      const {data:members,error:memberError}=await supabase.from('family_members').select('family_id').eq('user_id',login.user.id);
+      if(memberError)throw memberError;
+      if(members?.length!==1)throw new Error('Expected exactly one family membership.');
+      const {data:roster,error:rosterError}=await supabase.from('students').select('id,name,instrument').eq('family_id',members[0].family_id).order('name');
+      if(rosterError)throw rosterError;
+      sessionStorage.setItem('practice_pal_roster',JSON.stringify(roster??[]));
+      const {error:logoutError}=await supabase.auth.signOut();
+      if(logoutError)throw logoutError;
+      setPassword('');setScreen('splash');
+    }catch(error){setAuthError(error.message||String(error));
+      // Do not leave a privileged parent session active after failed family setup.
+      await supabase.auth.signOut();
+    }finally{setTransitioning(false);}
+  }
+  async function unlockParent(e){
+    e.preventDefault();if(!supabase||transitioning)return;
+    setTransitioning(true);setAuthError('');
+    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    if(error){setAuthError(error.message);setTransitioning(false);return;}
+    if(data?.user?.is_anonymous){await supabase.auth.signOut();setAuthError('Parent credentials required.');setTransitioning(false);return;}
+    setPassword('');setScreen('parent-dashboard');setTransitioning(false);
+  }
+  async function signOut(){
+    if(!supabase||savingRef.current||transitioning)return;
+    if(hasUnsaved()&&!window.confirm('Discard unsaved practice time?'))return;
+    setTransitioning(true);setAuthError('');
+    const {error}=await supabase.auth.signOut();
+    if(error)setAuthError(error.message);
+    else{setPassword('');setScreen(sessionStorage.getItem('practice_pal_roster')?'splash':'family-login');}
+    setTransitioning(false);
+  }
+  async function chooseMode(){
+    if(!supabase||transitioning||savingRef.current)return;
+    if(hasUnsaved()&&!window.confirm('Discard unsaved practice time and return to the welcome screen?'))return;
+    setTransitioning(true);setAuthError('');
+    if(students.length)sessionStorage.setItem('practice_pal_roster',JSON.stringify(students.map(s=>({id:s.id,name:s.name,instrument:s.instrument}))));
+    const {error}=await supabase.auth.signOut();
+    if(error)setAuthError(error.message);else{setPassword('');setScreen('splash');}
+    setTransitioning(false);
+  }
   function finishTimer(){if(!['running','paused'].includes(statusRef.current))return;if(statusRef.current==='running'){elapsedMs.current+=Math.max(0,Date.now()-startedAt.current);startedAt.current=null;}if(timerMode==='down')elapsedMs.current=Math.min(elapsedMs.current,targetMinutes*60000);secondsRef.current=Math.floor(elapsedMs.current/1000);setElapsedSeconds(secondsRef.current);setStatus('finished');}
   function resetTimer(){if(savingRef.current)return;if(hasUnsaved()&&!window.confirm('Discard unsaved practice time?'))return;resetClock();setCategory('Other');setFocus('');setNotes('');setSessionError('');}
 
@@ -229,18 +273,22 @@ export default function App() {
     setPinBusy(false);
   }
   async function enterStudentMode(){
-    if(hasUnsaved()&&!window.confirm('Discard unsaved timer and enter Student Mode?'))return;
-    sessionStorage.setItem('practice_pal_roster',JSON.stringify(students.map(s=>({id:s.id,name:s.name,instrument:s.instrument}))));
-    setAuthError('');
-    const {error:logoutError}=await supabase.auth.signOut();
-    if(logoutError){setAuthError(logoutError.message);return;}
-    const {error:anonError}=await supabase.auth.signInAnonymously();
-    if(anonError)setAuthError('Student Mode needs Anonymous Sign-ins enabled in Supabase Auth: '+anonError.message);
+    if(!supabase||transitioning)return;
+    setTransitioning(true);setAuthError('');
+    // Splash is accessible only after the parent session has been signed out.
+    const {data:current}=await supabase.auth.getSession();
+    if(current.session){setAuthError('Please sign out of Parent Mode before entering Student Mode.');setTransitioning(false);return;}
+    const {error}=await supabase.auth.signInAnonymously();
+    if(error)setAuthError('Enable Anonymous Sign-ins in Supabase Authentication: '+error.message);
+    setTransitioning(false);
   }
   async function returnToParent(){
-    sessionStorage.removeItem('practice_pal_roster');
+    if(!supabase||transitioning)return;
+    setTransitioning(true);setAuthError('');
     const {error}=await supabase.auth.signOut();
     if(error)setAuthError(error.message);
+    else{setPassword('');setScreen('splash');}
+    setTransitioning(false);
   }
 
   function exportPdf(){
@@ -265,39 +313,36 @@ export default function App() {
     popup.document.open();popup.document.write(html);popup.document.close();
   }
 
-  if(authLoading)return <main style={style.page}>Loading Practice Pal...</main>;
+  if(authLoading||transitioning)return <main style={style.page}>Preparing Practice Pal securely...</main>;
   if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent}/>;
-  if(!session)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,width:'100%',maxWidth:420,boxSizing:'border-box'}}><div style={{textAlign:'center'}}><div style={{fontSize:48}}>🎵</div><h1>Practice Pal</h1><p>Small practices. Big progress.</p></div><form onSubmit={signIn}><h2>Family Sign In</h2><FormField label="Email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField><FormField label="Password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField><button type="submit" style={{...style.button,width:'100%'}}>Sign In</button></form>{authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}</section></main>;
-
-  if(entryScreen)return <main style={{...style.page,display:'grid',placeItems:'center'}}>
+  // An existing authenticated parent session may only open Parent Mode, never the splash.
+  if(session&&screen!=='parent-dashboard')return <main style={style.page}><p>Securing your session...</p><button style={style.secondary} onClick={chooseMode}>Return to Welcome Screen (sign out)</button></main>;
+  if(!session&&screen==='parent-dashboard')return <main style={style.page}><p>Parent session ended.</p><button style={style.button} onClick={()=>setScreen('parent-login')}>Parent Sign In</button></main>;
+  if(!session&&screen==='splash')return <main style={{...style.page,display:'grid',placeItems:'center'}}>
     <section style={{...style.card,width:'100%',maxWidth:720,boxSizing:'border-box',textAlign:'center'}}>
-      <div style={{fontSize:48}} aria-hidden="true">🎵</div>
-      <h1 style={{marginBottom:6}}>Welcome to Practice Pal!</h1>
-      <p style={{color:palette.gray,marginTop:0}}>Who's using Practice Pal today?</p>
-      {familyLoading||dataLoading?<p>Preparing your family profiles...</p>:null}
-      {familyError&&<p role="alert" style={{color:palette.red}}>{familyError}</p>}
-      {studentError&&<p role="alert" style={{color:palette.red}}>{studentError}</p>}
+      <div style={{fontSize:48}} aria-hidden="true">🎵</div><h1>Welcome to Practice Pal!</h1>
+      <p style={{color:palette.gray}}>Who's using Practice Pal today?</p>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:16,margin:'24px 0'}}>
-        <section style={{...style.card,border:`1px solid ${palette.border}`}}>
-          <div style={{fontSize:42}} aria-hidden="true">🎹</div>
-          <h2>I'm a Student</h2>
-          <p style={{color:palette.gray}}>Choose your profile, enter your PIN, and practice!</p>
-          <button type="button" style={{...style.button,width:'100%'}} disabled={familyLoading||dataLoading||!!familyError||!!studentError||!familyId||students.length===0} onClick={enterStudentMode}>Enter Student Mode</button>
-        </section>
-        <section style={{...style.card,border:`1px solid ${palette.border}`}}>
-          <div style={{fontSize:42}} aria-hidden="true">🛡️</div>
-          <h2>I'm a Parent</h2>
-          <p style={{color:palette.gray}}>Review progress, manage students, and export weekly reports.</p>
-          <button type="button" style={{...style.button,width:'100%'}} onClick={()=>setEntryScreen(false)}>Enter Parent Dashboard</button>
-        </section>
+        <section style={{...style.card,border:`1px solid ${palette.border}`}}><div style={{fontSize:42}}>🎹</div><h2>I'm a Student</h2><p>Choose your profile and enter your PIN.</p><button type="button" style={{...style.button,width:'100%'}} onClick={enterStudentMode}>Student Practice</button></section>
+        <section style={{...style.card,border:`1px solid ${palette.border}`}}><div style={{fontSize:42}}>🛡️</div><h2>I'm a Parent</h2><p>Parent password required for dashboard access.</p><button type="button" style={{...style.button,width:'100%'}} onClick={()=>{setAuthError('');setScreen('parent-login');}}>Unlock Parent Dashboard</button></section>
       </div>
       {authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
-      <button type="button" style={style.secondary} onClick={signOut}>Sign out</button>
+      <button type="button" style={style.secondary} onClick={()=>{sessionStorage.removeItem('practice_pal_roster');setScreen('family-login');}}>Use a different family account</button>
     </section>
   </main>;
+  if(!session)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,width:'100%',maxWidth:420,boxSizing:'border-box'}}>
+    <div style={{textAlign:'center'}}><div style={{fontSize:48}}>🎵</div><h1>Practice Pal</h1><p>{screen==='parent-login'?'Parent verification required':'Small practices. Big progress.'}</p></div>
+    <form onSubmit={screen==='parent-login'?unlockParent:signIn}><h2>{screen==='parent-login'?'🔒 Parent Sign In':'Family Sign In'}</h2>
+      <FormField label="Email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField>
+      <FormField label="Password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField>
+      <button type="submit" style={{...style.button,width:'100%'}}>{screen==='parent-login'?'Unlock Parent Dashboard':'Continue to Welcome Screen'}</button>
+    </form>
+    {authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
+    {screen==='parent-login'&&<button type="button" style={{...style.secondary,marginTop:12,width:'100%'}} onClick={()=>{setAuthError('');setPassword('');setScreen('splash');}}>Back to Welcome Screen</button>}
+  </section></main>;
 
   return <main style={style.page}><div style={style.shell}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" style={style.button} onClick={()=>setEntryScreen(true)}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
     <nav aria-label="Main navigation" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:10,marginBottom:16}}>{[['dashboard','🏠 Dashboard'],['students','🎼 Students'],['practice','⏱️ Practice'],['progress','🏆 Progress']].map(([id,label])=><button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)} style={{...style.secondary,whiteSpace:'nowrap',fontWeight:700,background:tab===id?palette.navy:'#fff',color:tab===id?'#fff':palette.navy}}>{label}</button>)}</nav>
     {familyLoading?<div style={style.card}>Loading family...</div>:familyError?<p role="alert" style={{color:palette.red}}>{familyError}</p>:!familyId?<div style={style.card}>Waiting for family information...</div>:<>
       {notice&&<p role="status" style={{background:'#f0fdf4',color:palette.green,padding:14,borderRadius:10}}>{notice}</p>}
