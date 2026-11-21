@@ -66,7 +66,9 @@ export default function App() {
   useEffect(()=>{let el=document.getElementById('practice-pal-theme-css');if(!el){el=document.createElement('style');el.id='practice-pal-theme-css';document.head.appendChild(el);}el.textContent=themeCss;document.documentElement.dataset.practicePalTheme=theme;try{localStorage.setItem('practice_pal_theme',theme);}catch{}},[theme]);
   const themeButton=<button type="button" style={style.secondary} onClick={()=>setTheme(v=>v==='dark'?'light':'dark')}>{theme==='dark'?'☀️ Light Mode':'🌙 Dark Mode'}</button>;
   const [session,setSession]=useState(null),[authLoading,setAuthLoading]=useState(true);
-  const [invitationSetup,setInvitationSetup]=useState(false),[invitedPassword,setInvitedPassword]=useState(''),[inviteSetupError,setInviteSetupError]=useState('');
+  const [activationSetup,setActivationSetup]=useState(false),[activationCode,setActivationCode]=useState(''),[activationError,setActivationError]=useState('');
+  const [registerMode,setRegisterMode]=useState(false),[registerEmail,setRegisterEmail]=useState(''),[registerPassword,setRegisterPassword]=useState(''),[registerMessage,setRegisterMessage]=useState('');
+  const [issuedCode,setIssuedCode]=useState('');
   const [platformAdmin,setPlatformAdmin]=useState(false),[adminView,setAdminView]=useState(false),[adminData,setAdminData]=useState(null),[adminError,setAdminError]=useState(''),[adminBusy,setAdminBusy]=useState(false);
   const [newInviteEmail,setNewInviteEmail]=useState(''),[newInviteFamily,setNewInviteFamily]=useState('');
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[authError,setAuthError]=useState('');
@@ -138,7 +140,7 @@ export default function App() {
       setAuthLoading(false);
     });
     const {data:{subscription}}=supabase.auth.onAuthStateChange((event,next)=>{
-      if(event==='PASSWORD_RECOVERY'||(event==='SIGNED_IN'&&window.location.hash.includes('type=invite')))setInvitationSetup(true);
+      // Manual activation does not use invitation email links.
       if(active){setSession(next);setAuthLoading(false);if(!next)setParentUnlocked(false);}
     });
     return()=>{active=false;subscription.unsubscribe();};
@@ -154,7 +156,7 @@ export default function App() {
     (async()=>{const {data,error}=await supabase.from('family_members').select('family_id').eq('user_id',userId);
       if(cancelled)return;
       if(error)setFamilyError(error.message);
-      else if(data?.length!==1){setFamilyError('Expected exactly one family membership.');if(data?.length===0)setInvitationSetup(true);}
+      else if(data?.length!==1){setFamilyError('Expected exactly one family membership.');if(data?.length===0)setActivationSetup(true);}
       else setFamilyId(data[0].family_id);
       setFamilyLoading(false);
     })();
@@ -219,8 +221,7 @@ export default function App() {
       const {data:members,error:memberError}=await supabase.from('family_members').select('family_id').eq('user_id',data.user.id);
       if(memberError)throw memberError;
       if(members?.length!==1){
-        const {error:claimError}=await supabase.rpc('practice_pal_claim_invitation');
-        if(claimError)throw new Error('No family membership or valid invitation: '+claimError.message);
+        setActivationSetup(true);setPassword('');return;
       }
       const {data:actualMembers,error:actualMemberError}=await supabase.from('family_members').select('family_id').eq('user_id',data.user.id);
       if(actualMemberError)throw actualMemberError;
@@ -441,55 +442,66 @@ export default function App() {
   }
 
   async function refreshAdmin(){
-    const {data,error}=await supabase.rpc('practice_pal_admin_overview');
+    const {data,error}=await supabase.rpc('practice_pal_admin_codes_overview');
     if(error)setAdminError(error.message);else {setAdminError('');setAdminData(data);}
   }
-  async function sendFamilyInvite(e){
-    e.preventDefault();if(adminBusy)return;setAdminBusy(true);setAdminError('');
+  async function createFamilyCode(e){
+    e.preventDefault();if(adminBusy)return;setAdminBusy(true);setAdminError('');setIssuedCode('');
     try{
-      const {data:{session:active}}=await supabase.auth.getSession();
-      if(!active)throw new Error('Sign in again');
-      const response=await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/family-admin`,{
-        method:'POST',headers:{'Content-Type':'application/json',apikey:import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,Authorization:`Bearer ${active.access_token}`},
-        body:JSON.stringify({action:'invite',email:newInviteEmail,familyName:newInviteFamily})});
-      const result=await response.json();if(!response.ok)throw new Error(result.error||'Invitation failed');
-      setNewInviteEmail('');setNewInviteFamily('');await refreshAdmin();
+      const {data,error}=await supabase.rpc('practice_pal_admin_create_code',{p_email:newInviteEmail,p_family_name:newInviteFamily});
+      if(error)throw error;
+      setIssuedCode(data);setNewInviteEmail('');setNewInviteFamily('');await refreshAdmin();
     }catch(err){setAdminError(err.message);}finally{setAdminBusy(false);}
   }
-  async function revokeFamilyInvite(id){
-    if(!window.confirm('Revoke this pending invitation?'))return;
-    setAdminBusy(true);
-    const {error}=await supabase.rpc('practice_pal_admin_revoke_invitation',{p_invitation_id:id});
+  async function revokeFamilyCode(id){
+    if(!window.confirm('Revoke this unused activation code?'))return;
+    setAdminBusy(true);setAdminError('');
+    const {error}=await supabase.rpc('practice_pal_admin_revoke_code',{p_id:id});
     if(error)setAdminError(error.message);else await refreshAdmin();setAdminBusy(false);
   }
-  async function finishInvitation(e){
-    e.preventDefault();setInviteSetupError('');
-    if(invitedPassword.length<12){setInviteSetupError('Use at least 12 characters.');return;}
-    const {error}=await supabase.auth.updateUser({password:invitedPassword});
-    if(error){setInviteSetupError(error.message);return;}
-    const {error:claimError}=await supabase.rpc('practice_pal_claim_invitation');
-    if(claimError){setInviteSetupError('Password saved, but family activation failed: '+claimError.message);return;}
-    setInvitationSetup(false);setInvitedPassword('');window.history.replaceState({},'',window.location.pathname);
-    window.location.reload();
+  async function redeemActivation(e){
+    e.preventDefault();setActivationError('');
+    const {error}=await supabase.rpc('practice_pal_redeem_code',{p_code:activationCode.trim().toLowerCase()});
+    if(error){setActivationError(error.message);return;}
+    setActivationSetup(false);setActivationCode('');window.location.reload();
   }
-  if(invitationSetup&&session&&!session.user.is_anonymous)return <main style={style.page}><section style={{...style.card,maxWidth:500,margin:'50px auto'}}>
-    <h1>🎵 Activate your Practice Pal invitation</h1><p>Create your family sign-in password. Your separate Parent Mode password will be created after login.</p>
-    <form onSubmit={finishInvitation}><FormField id="invitedPassword" label="New family password (12+ characters)"><input id="invitedPassword" type="password" minLength={12} required style={style.input} value={invitedPassword} onChange={e=>setInvitedPassword(e.target.value)}/></FormField><button style={style.button}>Activate family</button></form>
-    {inviteSetupError&&<p role="alert" style={{color:palette.red}}>{inviteSetupError}</p>}
-  </section></main>;
+  async function registerFamily(e){
+    e.preventDefault();setRegisterMessage('');
+    if(registerPassword.length<12){setRegisterMessage('Use at least 12 characters.');return;}
+    const {data,error}=await supabase.auth.signUp({email:registerEmail.trim().toLowerCase(),password:registerPassword,options:{emailRedirectTo:'https://practice.frarey.app'}});
+    if(error){setRegisterMessage(error.message);return;}
+    setRegisterPassword('');
+    if(data.session){setRegisterMode(false);setActivationSetup(true);}
+    else setRegisterMessage('Check your email to verify the account. Then return, sign in, and enter the activation code provided by your administrator.');
+  }
   if(adminView&&platformAdmin&&session&&!session.user.is_anonymous)return <main style={style.page}><div style={style.shell}>
     <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h1>🛡️ Practice Pal Administration</h1><div>{themeButton} <button style={style.secondary} onClick={()=>setAdminView(false)}>Back to Practice Pal</button></div></header>
-    <section style={style.card}><h2>Invite a family</h2><p>Invitation only. The invited family creates its own password and receives an isolated family account after verifying its email.</p>
-      <form onSubmit={sendFamilyInvite}><FormField id="familyName" label="Family name"><input id="familyName" style={style.input} required maxLength={100} value={newInviteFamily} onChange={e=>setNewInviteFamily(e.target.value)}/></FormField>
+    <section style={style.card}><h2>Create manual activation code</h2><p>Codes expire in 14 days and work only with the designated email. Give the code to the family directly; no invitation email is sent.</p>
+      <form onSubmit={createFamilyCode}><FormField id="familyName" label="Family name"><input id="familyName" style={style.input} required maxLength={100} value={newInviteFamily} onChange={e=>setNewInviteFamily(e.target.value)}/></FormField>
       <FormField id="familyEmail" label="Family owner's email"><input id="familyEmail" style={style.input} required type="email" value={newInviteEmail} onChange={e=>setNewInviteEmail(e.target.value)}/></FormField>
-      <button style={style.button} disabled={adminBusy}>Send family invitation</button></form>
+      <button style={style.button} disabled={adminBusy}>Generate activation code</button></form>
+      {issuedCode&&<div role="status" style={{padding:16,border:`1px solid ${palette.border}`,borderRadius:10}}><strong>Copy this code now; it cannot be retrieved later.</strong><p style={{overflowWrap:'anywhere',fontFamily:'monospace'}}>{issuedCode}</p><button style={style.secondary} onClick={()=>navigator.clipboard.writeText(`Practice Pal: https://practice.frarey.app\nActivation code: ${issuedCode}\nRegister with the email address provided to your administrator.`)}>Copy registration instructions</button><button style={{...style.secondary,marginLeft:8}} onClick={()=>setIssuedCode('')}>Hide code</button></div>}
       {adminError&&<p role="alert" style={{color:palette.red}}>{adminError}</p>}
     </section><section style={style.card}><h2>Families</h2><button style={style.secondary} onClick={refreshAdmin}>Refresh</button>
       {(adminData?.families||[]).map(f=><p key={f.id}><strong>{f.name}</strong> — {f.members} member(s), {f.students} student(s)</p>)}
-    </section><section style={style.card}><h2>Invitations</h2>
-      {(adminData?.invitations||[]).map(i=><div key={i.id} style={{borderBottom:`1px solid ${palette.border}`,padding:'12px 0'}}><strong>{i.family_name}</strong> — {i.email} — {i.status} (expires {new Date(i.expires_at).toLocaleDateString()})
-        {i.status==='pending'&&<button type="button" style={{...style.secondary,marginLeft:12}} disabled={adminBusy} onClick={()=>revokeFamilyInvite(i.id)}>Revoke</button>}</div>)}
+    </section><section style={style.card}><h2>Activation codes</h2>
+      {(adminData?.codes||[]).map(c=><div key={c.id} style={{borderBottom:`1px solid ${palette.border}`,padding:'12px 0'}}><strong>{c.family_name}</strong> — {c.email} — {c.status} (expires {new Date(c.expires_at).toLocaleDateString()})
+        {c.status==='pending'&&<button type="button" style={{...style.secondary,marginLeft:12}} disabled={adminBusy} onClick={()=>revokeFamilyCode(c.id)}>Revoke</button>}</div>)}
     </section></div></main>;
+  if(activationSetup&&session&&!session.user.is_anonymous)return <main style={style.page}><section style={{...style.card,maxWidth:500,margin:'50px auto'}}>
+    {themeButton}<h1>🎵 Activate your family</h1><p>Enter the one-time code from your Practice Pal administrator. Your email must be confirmed and match the email associated with the code.</p>
+    <form onSubmit={redeemActivation}><FormField id="activationCode" label="Activation code"><input id="activationCode" type="text" required minLength={48} maxLength={48} autoComplete="off" style={style.input} value={activationCode} onChange={e=>setActivationCode(e.target.value)}/></FormField><button style={style.button}>Activate family</button></form>
+    {activationError&&<p role="alert" style={{color:palette.red}}>{activationError}</p>}
+    <button style={{...style.secondary,marginTop:12}} onClick={signOut}>Sign out</button>
+  </section></main>;
+  if(registerMode&&!session)return <main style={style.page}><section style={{...style.card,maxWidth:500,margin:'50px auto'}}>
+    {themeButton}<h1>🎵 Register your family</h1><p>Registration requires a code from the Practice Pal administrator. After email verification, sign in and redeem your code.</p>
+    <form onSubmit={registerFamily}><FormField id="registerEmail" label="Approved email"><input id="registerEmail" type="email" required style={style.input} value={registerEmail} onChange={e=>setRegisterEmail(e.target.value)}/></FormField>
+    <FormField id="registerPassword" label="Family password (12+ characters)"><input id="registerPassword" type="password" required minLength={12} style={style.input} value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)}/></FormField>
+    <button style={style.button}>Create family login</button></form>
+    {registerMessage&&<p role="status">{registerMessage}</p>}
+    <button style={style.secondary} onClick={()=>{setRegisterMode(false);setRegisterMessage('');}}>Back to sign in</button>
+  </section></main>;
   if(authLoading||transitioning)return <main style={style.page}>Preparing Practice Pal securely...</main>;
   if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent} theme={theme} onThemeChange={setTheme}/>;
   if(session&&screen==='parent-dashboard'&&!parentUnlocked)return <main style={style.page}><section style={style.card}><p>Parent Mode is locked or has expired.</p><button type="button" style={style.button} onClick={()=>setScreen('parent-login')}>Unlock Parent Mode</button></section></main>;
@@ -517,7 +529,7 @@ export default function App() {
       <FormField label="Family email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField>
       <FormField label="Family password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField>
       <button type="submit" style={style.button}>Continue to Welcome Screen</button>
-    </form>{authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
+    </form>{authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}<p><button type="button" style={style.secondary} onClick={()=>setRegisterMode(true)}>Register with activation code</button></p>
   </section></main>;
   if(screen!=='parent-dashboard'||!parentUnlocked)return <main style={style.page}>Parent access required.</main>;
 
