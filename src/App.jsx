@@ -91,6 +91,25 @@ export default function App() {
   function setStatus(v){statusRef.current=v;setTimerStatus(v);}
   function resetClock(){elapsedMs.current=0;startedAt.current=null;secondsRef.current=0;setElapsedSeconds(0);timerOwner.current=null;setStatus('idle');}
   function hasUnsaved(){return statusRef.current!=='idle'&&(secondsRef.current>0||startedAt.current!==null);}
+  function startTimer(){
+    if(statusRef.current!=='idle')return;
+    if(!selectedStudentId){setSessionError('Select a musician before starting the timer.');return;}
+    setSessionError('');setNotice('');
+    elapsedMs.current=0;secondsRef.current=0;setElapsedSeconds(0);
+    timerOwner.current=selectedStudentId;
+    startedAt.current=Date.now();setStatus('running');
+  }
+  function pauseTimer(){
+    if(statusRef.current!=='running'||startedAt.current===null)return;
+    elapsedMs.current+=Math.max(0,Date.now()-startedAt.current);
+    startedAt.current=null;
+    secondsRef.current=Math.floor(elapsedMs.current/1000);
+    setElapsedSeconds(secondsRef.current);setStatus('paused');
+  }
+  function resumeTimer(){
+    if(statusRef.current!=='paused')return;
+    startedAt.current=Date.now();setStatus('running');
+  }
 
   useEffect(()=>{
     if(!supabase){setAuthError('Supabase environment variables are missing.');setAuthLoading(false);return;}
