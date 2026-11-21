@@ -61,6 +61,7 @@ export default function App() {
   const [students,setStudents]=useState([]),[sessions,setSessions]=useState([]),[dataLoading,setDataLoading]=useState(false);
   const [studentError,setStudentError]=useState(''),[sessionError,setSessionError]=useState(''),[notice,setNotice]=useState('');
   const [tab,setTab]=useState('dashboard'),[busy,setBusy]=useState(false);
+  const [entryScreen,setEntryScreen]=useState(true);
   const [studentForm,setStudentForm]=useState({...blankStudent}),[editingId,setEditingId]=useState(null),[formOpen,setFormOpen]=useState(false);
   const [manualOpen,setManualOpen]=useState(false),[entry,setEntry]=useState({...blankEntry,practice_date:localDate()});
   const [selectedStudentId,setSelectedStudentId]=useState(''),[timerMode,setTimerMode]=useState('up'),[targetMinutes,setTargetMinutes]=useState(15);
@@ -139,8 +140,8 @@ export default function App() {
 
   async function refreshStudents(){const {data,error}=await supabase.from('students').select(studentColumns).eq('family_id',familyId).order('name');if(error){setStudentError(error.message);return false;}setStudents(data??[]);return true;}
   async function refreshSessions(){const {data,error}=await supabase.from('practice_sessions').select(sessionColumns).eq('family_id',familyId).order('practice_date',{ascending:false}).order('created_at',{ascending:false});if(error){setSessionError(error.message);return false;}setSessions(data??[]);return true;}
-  async function signIn(e){e.preventDefault();if(!supabase)return;setAuthLoading(true);setAuthError('');const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setAuthError(error.message);setAuthLoading(false);}
-  async function signOut(){if(!supabase||savingRef.current)return;if(hasUnsaved()&&!window.confirm('Sign out and discard unsaved practice time?'))return;const {error}=await supabase.auth.signOut();if(error)setAuthError(error.message);}
+  async function signIn(e){e.preventDefault();if(!supabase)return;setEntryScreen(true);setAuthLoading(true);setAuthError('');const {error}=await supabase.auth.signInWithPassword({email,password});if(error)setAuthError(error.message);setAuthLoading(false);}
+  async function signOut(){if(!supabase||savingRef.current)return;if(hasUnsaved()&&!window.confirm('Sign out and discard unsaved practice time?'))return;const {error}=await supabase.auth.signOut();if(error)setAuthError(error.message);else setEntryScreen(true);}
 
   function startTimer(){if(!selectedStudentId){setSessionError('Select a student first.');return;}if(statusRef.current!=='idle')return;setSessionError('');setNotice('');elapsedMs.current=0;secondsRef.current=0;setElapsedSeconds(0);startedAt.current=Date.now();timerOwner.current=userId;setStatus('running');}
   function pauseTimer(){if(statusRef.current!=='running')return;elapsedMs.current+=Math.max(0,Date.now()-startedAt.current);startedAt.current=null;secondsRef.current=Math.floor(elapsedMs.current/1000);setElapsedSeconds(secondsRef.current);setStatus('paused');}
@@ -268,8 +269,35 @@ export default function App() {
   if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent}/>;
   if(!session)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,width:'100%',maxWidth:420,boxSizing:'border-box'}}><div style={{textAlign:'center'}}><div style={{fontSize:48}}>🎵</div><h1>Practice Pal</h1><p>Small practices. Big progress.</p></div><form onSubmit={signIn}><h2>Family Sign In</h2><FormField label="Email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField><FormField label="Password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField><button type="submit" style={{...style.button,width:'100%'}}>Sign In</button></form>{authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}</section></main>;
 
+  if(entryScreen)return <main style={{...style.page,display:'grid',placeItems:'center'}}>
+    <section style={{...style.card,width:'100%',maxWidth:720,boxSizing:'border-box',textAlign:'center'}}>
+      <div style={{fontSize:48}} aria-hidden="true">🎵</div>
+      <h1 style={{marginBottom:6}}>Welcome to Practice Pal!</h1>
+      <p style={{color:palette.gray,marginTop:0}}>Who's using Practice Pal today?</p>
+      {familyLoading||dataLoading?<p>Preparing your family profiles...</p>:null}
+      {familyError&&<p role="alert" style={{color:palette.red}}>{familyError}</p>}
+      {studentError&&<p role="alert" style={{color:palette.red}}>{studentError}</p>}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:16,margin:'24px 0'}}>
+        <section style={{...style.card,border:`1px solid ${palette.border}`}}>
+          <div style={{fontSize:42}} aria-hidden="true">🎹</div>
+          <h2>I'm a Student</h2>
+          <p style={{color:palette.gray}}>Choose your profile, enter your PIN, and practice!</p>
+          <button type="button" style={{...style.button,width:'100%'}} disabled={familyLoading||dataLoading||!!familyError||!!studentError||!familyId||students.length===0} onClick={enterStudentMode}>Enter Student Mode</button>
+        </section>
+        <section style={{...style.card,border:`1px solid ${palette.border}`}}>
+          <div style={{fontSize:42}} aria-hidden="true">🛡️</div>
+          <h2>I'm a Parent</h2>
+          <p style={{color:palette.gray}}>Review progress, manage students, and export weekly reports.</p>
+          <button type="button" style={{...style.button,width:'100%'}} onClick={()=>setEntryScreen(false)}>Enter Parent Dashboard</button>
+        </section>
+      </div>
+      {authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
+      <button type="button" style={style.secondary} onClick={signOut}>Sign out</button>
+    </section>
+  </main>;
+
   return <main style={style.page}><div style={style.shell}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" style={style.button} onClick={enterStudentMode}>🎵 Enter Student Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" style={style.button} onClick={()=>setEntryScreen(true)}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
     <nav aria-label="Main navigation" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:10,marginBottom:16}}>{[['dashboard','🏠 Dashboard'],['students','🎼 Students'],['practice','⏱️ Practice'],['progress','🏆 Progress']].map(([id,label])=><button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)} style={{...style.secondary,whiteSpace:'nowrap',fontWeight:700,background:tab===id?palette.navy:'#fff',color:tab===id?'#fff':palette.navy}}>{label}</button>)}</nav>
     {familyLoading?<div style={style.card}>Loading family...</div>:familyError?<p role="alert" style={{color:palette.red}}>{familyError}</p>:!familyId?<div style={style.card}>Waiting for family information...</div>:<>
       {notice&&<p role="status" style={{background:'#f0fdf4',color:palette.green,padding:14,borderRadius:10}}>{notice}</p>}
