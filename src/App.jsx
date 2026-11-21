@@ -1,167 +1,163 @@
 
-import React, { useEffect, useRef, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import React, { useEffect, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const url = import.meta.env.VITE_SUPABASE_URL;
+const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const supabase = url && key ? createClient(url, key) : null;
 
-const supabase = supabaseUrl && supabaseKey
-  ? createClient(supabaseUrl, supabaseKey)
-  : null;
-
-const STUDENT_COLUMNS =
-  'id, family_id, name, instrument, weekly_goal_minutes, created_at';
-
-const SESSION_COLUMNS =
-  'id, student_id, family_id, duration_minutes, notes, created_at';
+const studentColumns =
+  "id,family_id,name,instrument,weekly_goal_minutes,created_at";
+const sessionColumns =
+  "id,family_id,student_id,practice_date,minutes,category,focus,notes,created_at";
 
 const instruments = [
-  'Piano', 'Guitar', 'Violin', 'Viola', 'Cello',
-  'Flute', 'Clarinet', 'Saxophone', 'Trumpet',
-  'Trombone', 'French Horn', 'Drums',
-  'Percussion', 'Voice', 'Other'
+  "Piano", "Guitar", "Violin", "Viola", "Cello",
+  "Flute", "Clarinet", "Saxophone", "Trumpet",
+  "Trombone", "French Horn", "Drums",
+  "Percussion", "Voice", "Other"
 ];
 
-const emptyStudent = {
-  name: '',
-  instrument: '',
-  weekly_goal_minutes: '60'
+const categories = [
+  "Other", "Warm-up", "Scales", "Technique",
+  "Repertoire", "Sight Reading", "Ear Training",
+  "Performance Preparation"
+];
+
+const blankStudent = {
+  name: "",
+  instrument: "",
+  weekly_goal_minutes: "60"
 };
 
-const theme = {
-  navy: '#172554',
-  blue: '#2563eb',
-  purple: '#7c3aed',
-  background: '#f3f6ff',
-  muted: '#64748b',
-  border: '#e2e8f0',
-  green: '#15803d',
-  red: '#b91c1c'
+const C = {
+  navy: "#172554",
+  blue: "#2563eb",
+  purple: "#7c3aed",
+  bg: "#f3f6ff",
+  gray: "#64748b",
+  border: "#e2e8f0",
+  green: "#15803d",
+  red: "#b91c1c"
 };
 
-const css = {
+const S = {
   page: {
-    minHeight: '100vh',
-    background: theme.background,
-    color: theme.navy,
-    fontFamily: 'Arial, sans-serif',
-    padding: '20px 14px',
-    boxSizing: 'border-box'
+    minHeight: "100vh",
+    background: C.bg,
+    color: C.navy,
+    fontFamily: "Arial, sans-serif",
+    padding: "20px 14px",
+    boxSizing: "border-box"
   },
-  shell: {
-    maxWidth: 1050,
-    margin: '0 auto'
-  },
+  shell: { maxWidth: 1050, margin: "0 auto" },
   card: {
-    background: '#fff',
-    border: `1px solid ${theme.border}`,
+    background: "#fff",
+    border: `1px solid ${C.border}`,
     borderRadius: 18,
     padding: 22,
-    boxShadow: '0 4px 20px rgba(23,37,84,.05)'
+    marginBottom: 16
   },
-  button: {
-    background: theme.blue,
-    color: '#fff',
+  primary: {
+    background: C.blue,
+    color: "#fff",
     border: 0,
     borderRadius: 10,
-    padding: '12px 18px',
+    padding: "12px 18px",
     fontSize: 15,
     fontWeight: 700,
-    cursor: 'pointer'
+    cursor: "pointer"
   },
   secondary: {
-    background: '#fff',
-    color: theme.navy,
-    border: `1px solid ${theme.border}`,
+    background: "#fff",
+    color: C.navy,
+    border: `1px solid ${C.border}`,
     borderRadius: 10,
-    padding: '11px 15px',
-    cursor: 'pointer'
+    padding: "11px 15px",
+    cursor: "pointer"
   },
   input: {
-    display: 'block',
-    width: '100%',
-    boxSizing: 'border-box',
+    display: "block",
+    width: "100%",
+    boxSizing: "border-box",
     padding: 12,
     marginTop: 6,
     marginBottom: 16,
-    border: `1px solid ${theme.border}`,
+    border: `1px solid ${C.border}`,
     borderRadius: 10,
     fontSize: 16,
-    background: '#fff'
+    background: "#fff"
   }
 };
 
 function formatTime(seconds) {
-  const total = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const remaining = total % 60;
-
-  const two = number => String(number).padStart(2, '0');
-
-  return hours > 0
-    ? `${two(hours)}:${two(minutes)}:${two(remaining)}`
-    : `${two(minutes)}:${two(remaining)}`;
+  const n = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = n % 60;
+  const two = v => String(v).padStart(2, "0");
+  return h
+    ? `${two(h)}:${two(m)}:${two(s)}`
+    : `${two(m)}:${two(s)}`;
 }
 
-function getWeekStart() {
-  const now = new Date();
-  const day = now.getDay();
-  const offset = (day + 6) % 7;
+function localDate(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
+function weekStart() {
+  const now = new Date();
+  const offset = (now.getDay() + 6) % 7;
   const start = new Date(
     now.getFullYear(),
     now.getMonth(),
     now.getDate() - offset
   );
-
-  return start;
+  return localDate(start);
 }
 
-function minutesForStudent(sessions, studentId) {
-  const start = getWeekStart();
+function weeklyMinutes(sessions, studentId) {
+  const start = weekStart();
+  const today = localDate();
 
   return sessions
-    .filter(session =>
-      session.student_id === studentId &&
-      new Date(session.created_at) >= start
+    .filter(item =>
+      item.student_id === studentId &&
+      item.practice_date >= start &&
+      item.practice_date <= today
     )
-    .reduce(
-      (total, session) =>
-        total + (Number(session.duration_minutes) || 0),
-      0
-    );
+    .reduce((sum, item) => sum + Number(item.minutes || 0), 0);
 }
 
-function ProgressBar({ value, goal }) {
-  const percentage = goal > 0
+function Progress({ value, goal }) {
+  const percent = goal > 0
     ? Math.min(100, Math.round(value / goal * 100))
     : 0;
 
   return (
     <div>
       <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        fontSize: 13,
-        marginBottom: 8
+        display: "flex",
+        justifyContent: "space-between",
+        marginBottom: 8,
+        fontSize: 13
       }}>
         <span>{value} / {goal} minutes</span>
-        <strong>{percentage}%</strong>
+        <strong>{percent}%</strong>
       </div>
-
       <div style={{
-        height: 10,
+        height: 11,
         borderRadius: 20,
-        background: '#e2e8f0',
-        overflow: 'hidden'
+        background: C.border,
+        overflow: "hidden"
       }}>
         <div style={{
-          width: `${percentage}%`,
-          height: '100%',
-          background: theme.purple,
-          borderRadius: 20
+          width: `${percent}%`,
+          height: "100%",
+          background: C.purple
         }} />
       </div>
     </div>
@@ -171,68 +167,71 @@ function ProgressBar({ value, goal }) {
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [authError, setAuthError] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
 
   const [familyId, setFamilyId] = useState(null);
   const [familyLoading, setFamilyLoading] = useState(false);
-  const [familyError, setFamilyError] = useState('');
+  const [familyError, setFamilyError] = useState("");
 
   const [students, setStudents] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [dataLoading, setDataLoading] = useState(false);
-  const [studentError, setStudentError] = useState('');
-  const [sessionError, setSessionError] = useState('');
-  const [notice, setNotice] = useState('');
-
-  const [tab, setTab] = useState('dashboard');
+  const [studentError, setStudentError] = useState("");
+  const [sessionError, setSessionError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [tab, setTab] = useState("dashboard");
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [studentForm, setStudentForm] = useState({
-    ...emptyStudent
+    ...blankStudent
   });
   const [busy, setBusy] = useState(false);
 
-  // Timer settings and state.
-  const [selectedStudentId, setSelectedStudentId] =
-    useState('');
-  const [timerMode, setTimerMode] = useState('up');
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [timerMode, setTimerMode] = useState("up");
   const [targetMinutes, setTargetMinutes] = useState(15);
-  const [timerStatus, setTimerStatus] = useState('idle');
+  const [timerStatus, setTimerStatus] = useState("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [notes, setNotes] = useState('');
-  const [savingSession, setSavingSession] = useState(false);
+  const [category, setCategory] = useState("Other");
+  const [focus, setFocus] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  // Timer uses wall-clock timestamps rather than
-  // counting setInterval calls.
-  const accumulatedMs = useRef(0);
-  const startedAtMs = useRef(null);
-  const timerStatusRef = useRef('idle');
-  const timerModeRef = useRef('up');
-  const targetMinutesRef = useRef(15);
+  const elapsedMsRef = useRef(0);
+  const startedAtRef = useRef(null);
+  const statusRef = useRef("idle");
   const elapsedRef = useRef(0);
   const savingRef = useRef(false);
+  const timerOwnerRef = useRef(null);
 
   const userId = session?.user?.id ?? null;
 
-  function setStatus(value) {
-    timerStatusRef.current = value;
+  function status(value) {
+    statusRef.current = value;
     setTimerStatus(value);
   }
 
-  function resetTimerState() {
-    accumulatedMs.current = 0;
-    startedAtMs.current = null;
+  function resetClock() {
+    elapsedMsRef.current = 0;
+    startedAtRef.current = null;
     elapsedRef.current = 0;
     setElapsedSeconds(0);
-    setStatus('idle');
+    status("idle");
+    timerOwnerRef.current = null;
+  }
+
+  function hasUnsavedTimer() {
+    return statusRef.current !== "idle" &&
+      (elapsedRef.current > 0 ||
+        startedAtRef.current !== null);
   }
 
   useEffect(() => {
     if (!supabase) {
-      setAuthError('Supabase connection is not configured.');
+      setAuthError("Supabase environment variables are missing.");
       setAuthLoading(false);
       return;
     }
@@ -246,15 +245,12 @@ export default function App() {
       setAuthLoading(false);
     });
 
-    const {
-      data: { subscription }
-    } = supabase.auth.onAuthStateChange(
-      (_event, nextSession) => {
+    const { data: { subscription } } =
+      supabase.auth.onAuthStateChange((_event, next) => {
         if (!active) return;
-        setSession(nextSession);
+        setSession(next);
         setAuthLoading(false);
-      }
-    );
+      });
 
     return () => {
       active = false;
@@ -264,15 +260,16 @@ export default function App() {
 
   useEffect(() => {
     setFamilyId(null);
-    setFamilyError('');
+    setFamilyError("");
     setStudents([]);
     setSessions([]);
-    setStudentError('');
-    setSessionError('');
-    setNotice('');
-    setTab('dashboard');
-    setSelectedStudentId('');
-    resetTimerState();
+    setSelectedStudentId("");
+    setStudentError("");
+    setSessionError("");
+    setNotice("");
+    setTab("dashboard");
+    setFormOpen(false);
+    resetClock();
 
     if (!supabase || !userId) {
       setFamilyLoading(false);
@@ -284,9 +281,9 @@ export default function App() {
 
     async function loadFamily() {
       const { data, error } = await supabase
-        .from('family_members')
-        .select('family_id')
-        .eq('user_id', userId);
+        .from("family_members")
+        .select("family_id")
+        .eq("user_id", userId);
 
       if (cancelled) return;
 
@@ -294,7 +291,7 @@ export default function App() {
         setFamilyError(error.message);
       } else if (data?.length !== 1) {
         setFamilyError(
-          'Expected exactly one family membership.'
+          "Expected exactly one family membership."
         );
       } else {
         setFamilyId(data[0].family_id);
@@ -304,249 +301,196 @@ export default function App() {
     }
 
     loadFamily();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [userId]);
 
   useEffect(() => {
     if (!supabase || !userId || !familyId) {
-      setStudents([]);
-      setSessions([]);
       setDataLoading(false);
       return;
     }
 
     let cancelled = false;
     setDataLoading(true);
+    setStudentError("");
+    setSessionError("");
 
     async function loadData() {
-      const [studentResult, sessionResult] =
-        await Promise.all([
-          supabase
-            .from('students')
-            .select(STUDENT_COLUMNS)
-            .eq('family_id', familyId)
-            .order('name'),
-
-          supabase
-            .from('practice_sessions')
-            .select(SESSION_COLUMNS)
-            .eq('family_id', familyId)
-            .order('created_at', { ascending: false })
-        ]);
+      const [a, b] = await Promise.all([
+        supabase.from("students")
+          .select(studentColumns)
+          .eq("family_id", familyId)
+          .order("name"),
+        supabase.from("practice_sessions")
+          .select(sessionColumns)
+          .eq("family_id", familyId)
+          .order("practice_date", { ascending: false })
+          .order("created_at", { ascending: false })
+      ]);
 
       if (cancelled) return;
 
-      if (studentResult.error) {
-        setStudentError(studentResult.error.message);
-      } else {
-        setStudents(studentResult.data ?? []);
-      }
+      if (a.error) setStudentError(a.error.message);
+      else setStudents(a.data ?? []);
 
-      if (sessionResult.error) {
-        setSessionError(sessionResult.error.message);
-      } else {
-        setSessions(sessionResult.data ?? []);
-      }
+      if (b.error) setSessionError(b.error.message);
+      else setSessions(b.data ?? []);
 
       setDataLoading(false);
     }
 
     loadData();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [userId, familyId]);
 
   useEffect(() => {
     if (
       selectedStudentId &&
-      !students.some(student =>
-        student.id === selectedStudentId
-      )
+      !students.some(s => s.id === selectedStudentId)
     ) {
-      setSelectedStudentId('');
+      setSelectedStudentId("");
     }
   }, [students, selectedStudentId]);
 
-  // Update the timer display while running.
   useEffect(() => {
-    if (timerStatus !== 'running') return;
+    if (timerStatus !== "running") return;
 
-    const interval = setInterval(() => {
-      if (startedAtMs.current === null) return;
+    function tick() {
+      if (startedAtRef.current === null) return;
 
-      const milliseconds =
-        accumulatedMs.current +
-        (Date.now() - startedAtMs.current);
+      const ms = elapsedMsRef.current +
+        Math.max(0, Date.now() - startedAtRef.current);
 
-      const seconds = Math.floor(milliseconds / 1000);
+      const limit = targetMinutes * 60000;
 
-      if (
-        timerModeRef.current === 'down' &&
-        milliseconds >= targetMinutesRef.current * 60000
-      ) {
-        const targetSeconds =
-          targetMinutesRef.current * 60;
-
-        accumulatedMs.current =
-          targetSeconds * 1000;
-        startedAtMs.current = null;
-        elapsedRef.current = targetSeconds;
-        setElapsedSeconds(targetSeconds);
-        setStatus('finished');
+      if (timerMode === "down" && ms >= limit) {
+        elapsedMsRef.current = limit;
+        startedAtRef.current = null;
+        elapsedRef.current = targetMinutes * 60;
+        setElapsedSeconds(targetMinutes * 60);
+        status("finished");
         return;
       }
 
+      const seconds = Math.floor(ms / 1000);
       elapsedRef.current = seconds;
       setElapsedSeconds(seconds);
-    }, 250);
+    }
 
-    return () => clearInterval(interval);
-  }, [timerStatus]);
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [timerStatus, timerMode, targetMinutes]);
+
+  useEffect(() => {
+    function beforeUnload(event) {
+      if (!hasUnsavedTimer()) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    window.addEventListener("beforeunload", beforeUnload);
+    return () =>
+      window.removeEventListener("beforeunload", beforeUnload);
+  }, []);
 
   function startTimer() {
     if (!selectedStudentId) {
-      setSessionError('Select a student first.');
+      setSessionError("Please select a student first.");
       return;
     }
 
-    if (timerStatusRef.current !== 'idle') return;
+    if (statusRef.current !== "idle") return;
 
-    setSessionError('');
-    setNotice('');
-    accumulatedMs.current = 0;
-    startedAtMs.current = Date.now();
+    setSessionError("");
+    setNotice("");
+    elapsedMsRef.current = 0;
     elapsedRef.current = 0;
+    startedAtRef.current = Date.now();
+    timerOwnerRef.current = userId;
     setElapsedSeconds(0);
-    setStatus('running');
+    status("running");
   }
 
   function pauseTimer() {
-    if (timerStatusRef.current !== 'running') return;
+    if (statusRef.current !== "running") return;
 
-    const now = Date.now();
-    accumulatedMs.current +=
-      now - startedAtMs.current;
-    startedAtMs.current = null;
+    elapsedMsRef.current +=
+      Math.max(0, Date.now() - startedAtRef.current);
+    startedAtRef.current = null;
 
-    const seconds = Math.floor(
-      accumulatedMs.current / 1000
-    );
-
+    const seconds = Math.floor(elapsedMsRef.current / 1000);
     elapsedRef.current = seconds;
     setElapsedSeconds(seconds);
-    setStatus('paused');
+    status("paused");
   }
 
   function resumeTimer() {
-    if (timerStatusRef.current !== 'paused') return;
-
-    startedAtMs.current = Date.now();
-    setStatus('running');
+    if (statusRef.current !== "paused") return;
+    startedAtRef.current = Date.now();
+    status("running");
   }
 
   function finishTimer() {
-    if (timerStatusRef.current === 'running') {
-      const now = Date.now();
-
-      accumulatedMs.current +=
-        now - startedAtMs.current;
-
-      startedAtMs.current = null;
-    }
-
-    if (
-      timerStatusRef.current !== 'running' &&
-      timerStatusRef.current !== 'paused'
-    ) {
+    if (!["running", "paused"].includes(statusRef.current))
       return;
+
+    if (statusRef.current === "running") {
+      elapsedMsRef.current +=
+        Math.max(0, Date.now() - startedAtRef.current);
+      startedAtRef.current = null;
     }
 
-    const seconds = Math.floor(
-      accumulatedMs.current / 1000
-    );
+    if (timerMode === "down") {
+      elapsedMsRef.current = Math.min(
+        elapsedMsRef.current,
+        targetMinutes * 60000
+      );
+    }
 
-    const finalSeconds =
-      timerModeRef.current === 'down'
-        ? Math.min(
-            seconds,
-            targetMinutesRef.current * 60
-          )
-        : seconds;
-
-    elapsedRef.current = finalSeconds;
-    setElapsedSeconds(finalSeconds);
-    setStatus('finished');
+    const seconds = Math.floor(elapsedMsRef.current / 1000);
+    elapsedRef.current = seconds;
+    setElapsedSeconds(seconds);
+    status("finished");
   }
 
   function resetTimer() {
-    if (
-      elapsedRef.current > 0 &&
-      !window.confirm(
-        'Discard the current unsaved practice time?'
-      )
-    ) {
-      return;
-    }
-
-    resetTimerState();
-    setNotes('');
-    setSessionError('');
-  }
-
-  function changeTimerMode(value) {
-    if (timerStatusRef.current !== 'idle') return;
-    timerModeRef.current = value;
-    setTimerMode(value);
-    resetTimerState();
-  }
-
-  function changeTargetMinutes(value) {
-    if (timerStatusRef.current !== 'idle') return;
-
-    const parsed = Number(value);
+    if (savingRef.current) return;
 
     if (
-      Number.isSafeInteger(parsed) &&
-      parsed >= 1 &&
-      parsed <= 240
-    ) {
-      targetMinutesRef.current = parsed;
-      setTargetMinutes(parsed);
-    }
-  }
+      hasUnsavedTimer() &&
+      !window.confirm("Discard this unsaved practice session?")
+    ) return;
 
-  function changeSelectedStudent(value) {
-    if (timerStatusRef.current !== 'idle') return;
-    setSelectedStudentId(value);
+    resetClock();
+    setFocus("");
+    setNotes("");
+    setCategory("Other");
+    setSessionError("");
   }
 
   async function refreshStudents() {
     const { data, error } = await supabase
-      .from('students')
-      .select(STUDENT_COLUMNS)
-      .eq('family_id', familyId)
-      .order('name');
+      .from("students")
+      .select(studentColumns)
+      .eq("family_id", familyId)
+      .order("name");
 
     if (error) {
       setStudentError(error.message);
       return false;
     }
-
     setStudents(data ?? []);
     return true;
   }
 
   async function refreshSessions() {
     const { data, error } = await supabase
-      .from('practice_sessions')
-      .select(SESSION_COLUMNS)
-      .eq('family_id', familyId)
-      .order('created_at', { ascending: false });
+      .from("practice_sessions")
+      .select(sessionColumns)
+      .eq("family_id", familyId)
+      .order("practice_date", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (error) {
       setSessionError(error.message);
@@ -559,80 +503,75 @@ export default function App() {
 
   async function savePractice() {
     if (
-      !supabase ||
-      !familyId ||
-      !selectedStudentId ||
-      savingRef.current
+      !supabase || !familyId ||
+      !selectedStudentId || savingRef.current ||
+      statusRef.current !== "finished"
     ) return;
 
-    if (timerStatusRef.current !== 'finished') {
-      setSessionError(
-        'Finish the timer before saving.'
-      );
+    if (timerOwnerRef.current !== userId) {
+      setSessionError("Session ownership changed. Please sign in again.");
       return;
     }
 
-    const durationMinutes = Math.ceil(
-      elapsedRef.current / 60
+    const student = students.find(
+      s => s.id === selectedStudentId &&
+        s.family_id === familyId
     );
 
-    if (durationMinutes < 1) {
-      setSessionError(
-        'Practice for at least one second before saving.'
-      );
+    if (!student) {
+      setSessionError("Select a valid family student.");
       return;
     }
 
-    if (!students.some(student =>
-      student.id === selectedStudentId
-    )) {
-      setSessionError('Select a valid family student.');
+    const seconds = elapsedRef.current;
+
+    if (seconds < 1) {
+      setSessionError("Practice for at least one second.");
       return;
     }
+
+    // The existing database stores whole minutes.
+    // A partial minute is rounded up when saved.
+    const minutes = Math.ceil(seconds / 60);
 
     savingRef.current = true;
-    setSavingSession(true);
-    setSessionError('');
-    setNotice('');
+    setSaving(true);
+    setSessionError("");
+    setNotice("");
 
     const { data, error } = await supabase
-      .from('practice_sessions')
+      .from("practice_sessions")
       .insert({
         family_id: familyId,
         student_id: selectedStudentId,
-        duration_minutes: durationMinutes,
+        practice_date: localDate(),
+        minutes,
+        category,
+        focus: focus.trim() || null,
         notes: notes.trim() || null
       })
-      .select('id');
+      .select("id");
 
     if (error) {
       setSessionError(error.message);
     } else if (data?.length !== 1) {
       setSessionError(
-        'The practice session could not be confirmed.'
+        "The save could not be confirmed. Check the log before retrying."
       );
+      // Avoid treating an uncertain response as a confirmed save.
     } else {
-      const refreshed = await refreshSessions();
-
-      if (refreshed) {
-        resetTimerState();
-        setNotes('');
-        setNotice(
-          `${durationMinutes} minute(s) saved to the practice log!`
-        );
-      } else {
-        // The insert succeeded, so do not offer a
-        // second save that could create a duplicate.
-        resetTimerState();
-        setNotes('');
-        setNotice(
-          'Practice saved, but the log could not refresh.'
-        );
-      }
+      resetClock();
+      setFocus("");
+      setNotes("");
+      setCategory("Other");
+      setNotice(
+        `🎉 ${minutes} minute(s) saved to ${student.name}'s practice log!`
+      );
+      await refreshSessions();
     }
 
     savingRef.current = false;
-    setSavingSession(false);
+    setSaving(false);
   }
 
   async function signIn(event) {
@@ -640,13 +579,12 @@ export default function App() {
     if (!supabase) return;
 
     setAuthLoading(true);
-    setAuthError('');
+    setAuthError("");
 
-    const { error } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
 
     if (error) setAuthError(error.message);
     setAuthLoading(false);
@@ -656,51 +594,46 @@ export default function App() {
     if (!supabase) return;
 
     if (
-      elapsedRef.current > 0 &&
-      timerStatusRef.current !== 'idle' &&
+      hasUnsavedTimer() &&
       !window.confirm(
-        'Sign out and discard unsaved practice time?'
+        "Sign out and discard your unsaved practice time?"
       )
     ) return;
 
-    setAuthError('');
-
     const { error } = await supabase.auth.signOut();
-
     if (error) setAuthError(error.message);
   }
 
   function addStudent() {
     setEditingId(null);
-    setStudentForm({ ...emptyStudent });
+    setStudentForm({ ...blankStudent });
     setFormOpen(true);
-    setTab('students');
-    setStudentError('');
+    setStudentError("");
+    setTab("students");
   }
 
   function editStudent(student) {
     setEditingId(student.id);
     setStudentForm({
-      name: student.name ?? '',
-      instrument: student.instrument ?? '',
+      name: student.name ?? "",
+      instrument: student.instrument ?? "",
       weekly_goal_minutes: String(
         student.weekly_goal_minutes ?? 60
       )
     });
     setFormOpen(true);
-    setTab('students');
-    setStudentError('');
+    setStudentError("");
+    setTab("students");
   }
 
   function cancelForm() {
-    setFormOpen(false);
     setEditingId(null);
-    setStudentForm({ ...emptyStudent });
+    setStudentForm({ ...blankStudent });
+    setFormOpen(false);
   }
 
   async function saveStudent(event) {
     event.preventDefault();
-
     if (!supabase || !familyId || busy) return;
 
     const name = studentForm.name.trim();
@@ -711,22 +644,19 @@ export default function App() {
     const goal = Number(goalText);
 
     if (
-      !name ||
-      !instrument ||
-      !goalText ||
+      !name || !instrument || !goalText ||
       !Number.isSafeInteger(goal) ||
-      goal < 0 ||
-      goal > 10080
+      goal < 0 || goal > 10080
     ) {
       setStudentError(
-        'Enter a name, instrument, and valid weekly goal.'
+        "Enter a name, instrument, and valid weekly goal."
       );
       return;
     }
 
     setBusy(true);
-    setStudentError('');
-    setNotice('');
+    setStudentError("");
+    setNotice("");
 
     const payload = {
       name,
@@ -734,35 +664,27 @@ export default function App() {
       weekly_goal_minutes: goal
     };
 
+    const wasEditing = Boolean(editingId);
+
     const result = editingId
-      ? await supabase
-          .from('students')
+      ? await supabase.from("students")
           .update(payload)
-          .eq('id', editingId)
-          .eq('family_id', familyId)
-          .select('id')
-      : await supabase
-          .from('students')
-          .insert({
-            ...payload,
-            family_id: familyId
-          })
-          .select('id');
+          .eq("id", editingId)
+          .eq("family_id", familyId)
+          .select("id")
+      : await supabase.from("students")
+          .insert({ ...payload, family_id: familyId })
+          .select("id");
 
     if (result.error) {
       setStudentError(result.error.message);
     } else if (result.data?.length !== 1) {
-      setStudentError(
-        'The student change could not be confirmed.'
-      );
+      setStudentError("Student change could not be confirmed.");
     } else {
       cancelForm();
-
       if (await refreshStudents()) {
         setNotice(
-          editingId
-            ? 'Student updated.'
-            : 'Student added.'
+          wasEditing ? "Student updated." : "Student added."
         );
       }
     }
@@ -773,31 +695,40 @@ export default function App() {
   async function deleteStudent(student) {
     if (!supabase || !familyId || busy) return;
 
+    if (
+      selectedStudentId === student.id &&
+      hasUnsavedTimer()
+    ) {
+      setStudentError(
+        "Finish or reset this student's timer before deleting."
+      );
+      return;
+    }
+
     if (!window.confirm(
-      `Delete ${student.name}? This cannot be undone. ` +
-      'Associated practice history may be affected.'
+      `Delete ${student.name}? Related practice history may be affected.`
     )) return;
 
     setBusy(true);
-    setStudentError('');
-    setNotice('');
+    setStudentError("");
+    setNotice("");
 
     const { data, error } = await supabase
-      .from('students')
+      .from("students")
       .delete()
-      .eq('id', student.id)
-      .eq('family_id', familyId)
-      .select('id');
+      .eq("id", student.id)
+      .eq("family_id", familyId)
+      .select("id");
 
     if (error) {
       setStudentError(error.message);
     } else if (data?.length !== 1) {
-      setStudentError('Deletion could not be confirmed.');
+      setStudentError("Deletion could not be confirmed.");
     } else {
       if (editingId === student.id) cancelForm();
-
       if (await refreshStudents()) {
-        setNotice('Student deleted.');
+        setNotice("Student deleted.");
+        await refreshSessions();
       }
     }
 
@@ -805,19 +736,21 @@ export default function App() {
   }
 
   const totalGoal = students.reduce(
-    (sum, student) =>
-      sum + (Number(student.weekly_goal_minutes) || 0),
+    (sum, s) => sum + Number(s.weekly_goal_minutes || 0),
     0
   );
 
   const weeklyTotal = students.reduce(
-    (sum, student) =>
-      sum + minutesForStudent(sessions, student.id),
+    (sum, s) => sum + weeklyMinutes(sessions, s.id),
     0
   );
 
   const selectedStudent = students.find(
-    student => student.id === selectedStudentId
+    s => s.id === selectedStudentId
+  );
+
+  const studentSessions = sessions.filter(
+    s => s.student_id === selectedStudentId
   );
 
   const remainingSeconds = Math.max(
@@ -825,42 +758,40 @@ export default function App() {
     targetMinutes * 60 - elapsedSeconds
   );
 
-  const timerDisplay = timerMode === 'down'
+  const timerDisplay = timerMode === "down"
     ? formatTime(remainingSeconds)
     : formatTime(elapsedSeconds);
 
-  const tabs = [
-    ['dashboard', '🏠 Dashboard'],
-    ['students', '🎼 Students'],
-    ['practice', '⏱️ Practice'],
-    ['progress', '🏆 Progress']
+  const nav = [
+    ["dashboard", "🏠 Dashboard"],
+    ["students", "🎼 Students"],
+    ["practice", "⏱️ Practice"],
+    ["progress", "🏆 Progress"]
   ];
 
   if (authLoading) {
-    return (
-      <main style={css.page}>
-        <p>Loading Practice Pal...</p>
-      </main>
-    );
+    return <main style={S.page}>Loading Practice Pal...</main>;
   }
 
   if (!session) {
     return (
       <main style={{
-        ...css.page,
-        display: 'grid',
-        placeItems: 'center'
+        ...S.page,
+        display: "grid",
+        placeItems: "center"
       }}>
         <section style={{
-          ...css.card,
-          width: '100%',
+          ...S.card,
+          width: "100%",
           maxWidth: 420,
-          boxSizing: 'border-box'
+          boxSizing: "border-box"
         }}>
-          <div style={{ textAlign: 'center' }}>
+          <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 48 }}>🎵</div>
             <h1>Practice Pal</h1>
-            <p>Small practices. Big progress.</p>
+            <p style={{ color: C.gray }}>
+              Small practices. Big progress.
+            </p>
           </div>
 
           <form onSubmit={signIn}>
@@ -870,40 +801,34 @@ export default function App() {
             <input
               id="email"
               type="email"
-              autoComplete="email"
               required
-              style={css.input}
+              autoComplete="email"
+              style={S.input}
               value={email}
-              onChange={event =>
-                setEmail(event.target.value)
-              }
+              onChange={e => setEmail(e.target.value)}
             />
 
             <label htmlFor="password">Password</label>
             <input
               id="password"
               type="password"
-              autoComplete="current-password"
               required
-              style={css.input}
+              autoComplete="current-password"
+              style={S.input}
               value={password}
-              onChange={event =>
-                setPassword(event.target.value)
-              }
+              onChange={e => setPassword(e.target.value)}
             />
 
-            <button
-              type="submit"
-              style={{ ...css.button, width: '100%' }}
-            >
+            <button type="submit" style={{
+              ...S.primary,
+              width: "100%"
+            }}>
               Sign In
             </button>
           </form>
 
           {authError && (
-            <p role="alert" style={{
-              color: theme.red
-            }}>
+            <p role="alert" style={{ color: C.red }}>
               {authError}
             </p>
           )}
@@ -913,60 +838,53 @@ export default function App() {
   }
 
   return (
-    <main style={css.page}>
-      <div style={css.shell}>
+    <main style={S.page}>
+      <div style={S.shell}>
         <header style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
           gap: 12,
-          marginBottom: 20
+          marginBottom: 22
         }}>
           <div>
-            <h1 style={{ marginBottom: 4 }}>
+            <h1 style={{ margin: "0 0 5px" }}>
               🎵 Practice Pal
             </h1>
-            <small style={{ color: theme.muted }}>
+            <small style={{ color: C.gray }}>
               {session.user.email}
             </small>
           </div>
 
           <button
             type="button"
-            style={css.secondary}
+            style={S.secondary}
             onClick={signOut}
           >
             Sign Out
           </button>
         </header>
 
-        <nav
-          aria-label="Main navigation"
-          style={{
-            display: 'flex',
-            gap: 8,
-            overflowX: 'auto',
-            marginBottom: 22,
-            paddingBottom: 8
-          }}
-        >
-          {tabs.map(([id, label]) => (
+        <nav aria-label="Main navigation" style={{
+          display: "flex",
+          gap: 8,
+          overflowX: "auto",
+          paddingBottom: 10,
+          marginBottom: 16
+        }}>
+          {nav.map(([id, label]) => (
             <button
               key={id}
               type="button"
+              aria-current={tab === id ? "page" : undefined}
               onClick={() => setTab(id)}
-              aria-current={
-                tab === id ? 'page' : undefined
-              }
               style={{
-                ...css.secondary,
-                whiteSpace: 'nowrap',
+                ...S.secondary,
+                whiteSpace: "nowrap",
                 fontWeight: 700,
-                background:
-                  tab === id ? theme.navy : '#fff',
-                color:
-                  tab === id ? '#fff' : theme.navy
+                background: tab === id ? C.navy : "#fff",
+                color: tab === id ? "#fff" : C.navy
               }}
             >
               {label}
@@ -975,22 +893,22 @@ export default function App() {
         </nav>
 
         {familyLoading ? (
-          <div style={css.card}>Loading family...</div>
+          <div style={S.card}>Loading family...</div>
         ) : familyError ? (
-          <p role="alert" style={{ color: theme.red }}>
+          <p role="alert" style={{ color: C.red }}>
             {familyError}
           </p>
         ) : !familyId ? (
-          <div style={css.card}>
+          <div style={S.card}>
             Waiting for family information...
           </div>
         ) : (
           <>
             {notice && (
               <p role="status" style={{
+                background: "#f0fdf4",
+                color: C.green,
                 padding: 14,
-                background: '#f0fdf4',
-                color: theme.green,
                 borderRadius: 10
               }}>
                 {notice}
@@ -998,64 +916,63 @@ export default function App() {
             )}
 
             {studentError && (
-              <p role="alert" style={{ color: theme.red }}>
+              <p role="alert" style={{
+                color: C.red,
+                padding: 10
+              }}>
                 {studentError}
               </p>
             )}
 
             {sessionError && (
               <p role="alert" style={{
+                background: "#fef2f2",
+                color: C.red,
                 padding: 14,
-                background: '#fef2f2',
-                color: theme.red,
                 borderRadius: 10
               }}>
                 Practice log: {sessionError}
               </p>
             )}
 
-            {tab === 'dashboard' && (
+            {tab === "dashboard" && (
               <>
                 <section style={{
                   background:
-                    'linear-gradient(120deg,#2563eb,#7c3aed)',
-                  color: '#fff',
-                  borderRadius: 20,
+                    "linear-gradient(120deg,#2563eb,#7c3aed)",
+                  color: "#fff",
                   padding: 28,
+                  borderRadius: 20,
                   marginBottom: 20
                 }}>
                   <h2>Ready to make some music? 🎶</h2>
                   <p>
-                    Every practice brings you closer
-                    to your goals.
+                    Every practice brings you closer to your goals.
                   </p>
                   <button
                     type="button"
-                    style={css.secondary}
-                    onClick={() => setTab('practice')}
+                    style={S.secondary}
+                    onClick={() => setTab("practice")}
                   >
                     ⏱️ Start Practicing
                   </button>
                 </section>
 
                 <div style={{
-                  display: 'grid',
+                  display: "grid",
                   gridTemplateColumns:
-                    'repeat(auto-fit,minmax(180px,1fr))',
-                  gap: 14,
-                  marginBottom: 20
+                    "repeat(auto-fit,minmax(180px,1fr))",
+                  gap: 14
                 }}>
                   {[
-                    ['👨‍👩‍👧‍👦', 'Students', students.length],
-                    ['🎯', 'Weekly Goal', `${totalGoal} min`],
-                    ['🎵', 'Practiced This Week',
+                    ["👨‍👩‍👧‍👦", "Students", students.length],
+                    ["🎯", "Weekly Goal", `${totalGoal} min`],
+                    ["🎵", "Practiced This Week",
                       `${weeklyTotal} min`]
                   ].map(([icon, label, value]) => (
-                    <div key={label} style={css.card}>
+                    <div key={label} style={S.card}>
                       <div style={{ fontSize: 26 }}>{icon}</div>
-                      <p style={{ color: theme.muted }}>
-                        {label}
-                      </p>
+                      <p style={{ color: C.gray }}>{label}</p>
                       <strong style={{ fontSize: 27 }}>
                         {value}
                       </strong>
@@ -1063,84 +980,83 @@ export default function App() {
                   ))}
                 </div>
 
-                <section style={css.card}>
+                <section style={S.card}>
                   <h2>Your Musicians</h2>
 
                   {dataLoading ? (
                     <p>Loading students...</p>
                   ) : students.length === 0 ? (
-                    <p>Add your first musician to begin.</p>
+                    <button
+                      type="button"
+                      style={S.primary}
+                      onClick={addStudent}
+                    >
+                      + Add Your First Student
+                    </button>
                   ) : (
                     <div style={{
-                      display: 'grid',
+                      display: "grid",
                       gridTemplateColumns:
-                        'repeat(auto-fit,minmax(220px,1fr))',
+                        "repeat(auto-fit,minmax(220px,1fr))",
                       gap: 14
                     }}>
-                      {students.map(student => {
-                        const practiced = minutesForStudent(
-                          sessions,
-                          student.id
-                        );
+                      {students.map(student => (
+                        <div key={student.id} style={{
+                          background: C.bg,
+                          padding: 16,
+                          borderRadius: 14
+                        }}>
+                          <h3>🎵 {student.name}</h3>
+                          <p style={{ color: C.gray }}>
+                            {student.instrument}
+                          </p>
 
-                        return (
-                          <div
-                            key={student.id}
+                          <Progress
+                            value={weeklyMinutes(
+                              sessions,
+                              student.id
+                            )}
+                            goal={
+                              student.weekly_goal_minutes || 0
+                            }
+                          />
+
+                          <button
+                            type="button"
                             style={{
-                              background: theme.background,
-                              padding: 16,
-                              borderRadius: 14
+                              ...S.primary,
+                              marginTop: 14
+                            }}
+                            disabled={timerStatus !== "idle"}
+                            onClick={() => {
+                              setSelectedStudentId(student.id);
+                              setTab("practice");
                             }}
                           >
-                            <h3>🎵 {student.name}</h3>
-                            <p>{student.instrument}</p>
-
-                            <ProgressBar
-                              value={practiced}
-                              goal={
-                                student.weekly_goal_minutes || 0
-                              }
-                            />
-
-                            <button
-                              type="button"
-                              style={{
-                                ...css.button,
-                                marginTop: 14
-                              }}
-                              disabled={
-                                timerStatus !== 'idle'
-                              }
-                              onClick={() => {
-                                setSelectedStudentId(student.id);
-                                setTab('practice');
-                              }}
-                            >
-                              Practice
-                            </button>
-                          </div>
-                        );
-                      })}
+                            Start Practice
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </section>
               </>
             )}
 
-            {tab === 'students' && (
-              <section style={css.card}>
+            {tab === "students" && (
+              <section style={S.card}>
                 <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  flexWrap: "wrap",
                   gap: 12
                 }}>
                   <h2>🎼 Student Profiles</h2>
                   {!formOpen && (
                     <button
                       type="button"
-                      style={css.button}
+                      style={S.primary}
                       onClick={addStudent}
                     >
                       + Add Student
@@ -1149,19 +1065,14 @@ export default function App() {
                 </div>
 
                 {formOpen && (
-                  <form
-                    onSubmit={saveStudent}
-                    style={{
-                      background: theme.background,
-                      padding: 18,
-                      borderRadius: 14,
-                      marginBottom: 20
-                    }}
-                  >
+                  <form onSubmit={saveStudent} style={{
+                    background: C.bg,
+                    padding: 18,
+                    borderRadius: 14,
+                    marginBottom: 20
+                  }}>
                     <h3>
-                      {editingId
-                        ? 'Edit Student'
-                        : 'Add Student'}
+                      {editingId ? "Edit Student" : "Add Student"}
                     </h3>
 
                     <label htmlFor="studentName">
@@ -1171,14 +1082,12 @@ export default function App() {
                       id="studentName"
                       required
                       maxLength={100}
-                      style={css.input}
+                      style={S.input}
                       value={studentForm.name}
-                      onChange={event =>
-                        setStudentForm(previous => ({
-                          ...previous,
-                          name: event.target.value
-                        }))
-                      }
+                      onChange={e => setStudentForm(p => ({
+                        ...p,
+                        name: e.target.value
+                      }))}
                     />
 
                     <label htmlFor="instrument">
@@ -1187,14 +1096,12 @@ export default function App() {
                     <select
                       id="instrument"
                       required
-                      style={css.input}
+                      style={S.input}
                       value={studentForm.instrument}
-                      onChange={event =>
-                        setStudentForm(previous => ({
-                          ...previous,
-                          instrument: event.target.value
-                        }))
-                      }
+                      onChange={e => setStudentForm(p => ({
+                        ...p,
+                        instrument: e.target.value
+                      }))}
                     >
                       <option value="">Select instrument</option>
                       {instruments.map(item => (
@@ -1204,46 +1111,40 @@ export default function App() {
                       ))}
                     </select>
 
-                    <label htmlFor="weeklyGoal">
+                    <label htmlFor="goal">
                       Weekly Goal (minutes)
                     </label>
                     <input
-                      id="weeklyGoal"
+                      id="goal"
                       type="number"
                       min="0"
                       max="10080"
                       step="1"
                       required
-                      style={css.input}
-                      value={
-                        studentForm.weekly_goal_minutes
-                      }
-                      onChange={event =>
-                        setStudentForm(previous => ({
-                          ...previous,
-                          weekly_goal_minutes:
-                            event.target.value
-                        }))
-                      }
+                      style={S.input}
+                      value={studentForm.weekly_goal_minutes}
+                      onChange={e => setStudentForm(p => ({
+                        ...p,
+                        weekly_goal_minutes: e.target.value
+                      }))}
                     />
 
                     <div style={{
-                      display: 'flex',
+                      display: "flex",
                       gap: 10,
-                      flexWrap: 'wrap'
+                      flexWrap: "wrap"
                     }}>
                       <button
                         type="submit"
-                        style={css.button}
                         disabled={busy}
+                        style={S.primary}
                       >
-                        {busy ? 'Saving...' : 'Save Student'}
+                        {busy ? "Saving..." : "Save Student"}
                       </button>
-
                       <button
                         type="button"
-                        style={css.secondary}
                         disabled={busy}
+                        style={S.secondary}
                         onClick={cancelForm}
                       >
                         Cancel
@@ -1252,41 +1153,39 @@ export default function App() {
                   </form>
                 )}
 
+                {dataLoading && <p>Loading students...</p>}
+
                 {students.map(student => (
-                  <div
-                    key={student.id}
-                    style={{
-                      borderTop: `1px solid ${theme.border}`,
-                      padding: '18px 0'
-                    }}
-                  >
+                  <div key={student.id} style={{
+                    borderTop: `1px solid ${C.border}`,
+                    padding: "18px 0"
+                  }}>
                     <h3>🎵 {student.name}</h3>
                     <p>
-                      {student.instrument} ·{' '}
+                      {student.instrument} ·{" "}
                       {student.weekly_goal_minutes} min/week
                     </p>
 
                     <div style={{
-                      display: 'flex',
+                      display: "flex",
                       gap: 10,
-                      flexWrap: 'wrap'
+                      flexWrap: "wrap"
                     }}>
                       <button
                         type="button"
-                        style={css.secondary}
+                        style={S.secondary}
                         disabled={busy}
                         onClick={() => editStudent(student)}
                       >
                         Edit Profile
                       </button>
-
                       <button
                         type="button"
-                        style={{
-                          ...css.secondary,
-                          color: theme.red
-                        }}
                         disabled={busy}
+                        style={{
+                          ...S.secondary,
+                          color: C.red
+                        }}
                         onClick={() => deleteStudent(student)}
                       >
                         Delete
@@ -1297,17 +1196,12 @@ export default function App() {
               </section>
             )}
 
-            {tab === 'practice' && (
-              <div style={{
-                display: 'grid',
-                gap: 20
-              }}>
+            {tab === "practice" && (
+              <>
                 <section style={{
-                  ...css.card,
+                  ...S.card,
                   maxWidth: 650,
-                  width: '100%',
-                  margin: '0 auto',
-                  boxSizing: 'border-box'
+                  margin: "0 auto 20px"
                 }}>
                   <h2>⏱️ Practice Timer</h2>
 
@@ -1316,11 +1210,11 @@ export default function App() {
                   </label>
                   <select
                     id="practiceStudent"
-                    style={css.input}
+                    style={S.input}
                     value={selectedStudentId}
-                    disabled={timerStatus !== 'idle'}
-                    onChange={event =>
-                      changeSelectedStudent(event.target.value)
+                    disabled={timerStatus !== "idle"}
+                    onChange={e =>
+                      setSelectedStudentId(e.target.value)
                     }
                   >
                     <option value="">Choose a student</option>
@@ -1335,31 +1229,30 @@ export default function App() {
                   </select>
 
                   <div style={{
-                    display: 'flex',
+                    display: "flex",
                     gap: 10,
                     marginBottom: 20
                   }}>
                     {[
-                      ['up', 'Count Up'],
-                      ['down', 'Countdown']
+                      ["up", "Count Up"],
+                      ["down", "Countdown"]
                     ].map(([value, label]) => (
                       <button
                         key={value}
                         type="button"
-                        disabled={timerStatus !== 'idle'}
-                        onClick={() => changeTimerMode(value)}
+                        disabled={timerStatus !== "idle"}
+                        onClick={() => {
+                          setTimerMode(value);
+                          resetClock();
+                        }}
                         style={{
-                          ...css.secondary,
+                          ...S.secondary,
                           flex: 1,
                           fontWeight: 700,
                           background:
-                            timerMode === value
-                              ? theme.navy
-                              : '#fff',
+                            timerMode === value ? C.navy : "#fff",
                           color:
-                            timerMode === value
-                              ? '#fff'
-                              : theme.navy
+                            timerMode === value ? "#fff" : C.navy
                         }}
                       >
                         {label}
@@ -1367,8 +1260,8 @@ export default function App() {
                     ))}
                   </div>
 
-                  {timerMode === 'down' && (
-                    <div>
+                  {timerMode === "down" && (
+                    <>
                       <label htmlFor="duration">
                         Countdown Duration (minutes)
                       </label>
@@ -1378,119 +1271,120 @@ export default function App() {
                         min="1"
                         max="240"
                         step="1"
-                        style={css.input}
-                        disabled={timerStatus !== 'idle'}
+                        style={S.input}
+                        disabled={timerStatus !== "idle"}
                         value={targetMinutes}
-                        onChange={event =>
-                          changeTargetMinutes(event.target.value)
-                        }
+                        onChange={e => {
+                          const n = Number(e.target.value);
+                          if (
+                            Number.isSafeInteger(n) &&
+                            n >= 1 && n <= 240
+                          ) setTargetMinutes(n);
+                        }}
                       />
 
                       <div style={{
-                        display: 'flex',
+                        display: "flex",
                         gap: 8,
-                        flexWrap: 'wrap',
+                        flexWrap: "wrap",
                         marginBottom: 18
                       }}>
-                        {[5, 10, 15, 20, 30].map(value => (
+                        {[5, 10, 15, 20, 30].map(n => (
                           <button
-                            key={value}
+                            key={n}
                             type="button"
-                            style={css.secondary}
-                            disabled={timerStatus !== 'idle'}
-                            onClick={() =>
-                              changeTargetMinutes(value)
-                            }
+                            disabled={timerStatus !== "idle"}
+                            style={S.secondary}
+                            onClick={() => setTargetMinutes(n)}
                           >
-                            {value} min
+                            {n} min
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </>
                   )}
 
                   <div style={{
-                    background: theme.background,
+                    background: C.bg,
                     borderRadius: 20,
-                    padding: '32px 12px',
-                    textAlign: 'center',
+                    padding: "32px 12px",
+                    textAlign: "center",
                     marginBottom: 20
                   }}>
                     <div style={{
-                      fontSize: 'clamp(48px,10vw,76px)',
+                      fontSize: "clamp(48px,10vw,76px)",
                       fontWeight: 800,
-                      fontVariantNumeric: 'tabular-nums',
-                      letterSpacing: 2
+                      fontVariantNumeric: "tabular-nums"
                     }}>
                       {timerDisplay}
                     </div>
 
-                    <p style={{ color: theme.muted }}>
-                      {timerMode === 'down'
-                        ? 'Time Remaining'
-                        : 'Practice Time'}
+                    <p style={{ color: C.gray }}>
+                      {timerMode === "down"
+                        ? "Time Remaining"
+                        : "Practice Time"}
                     </p>
 
-                    {timerStatus === 'finished' && (
-                      <h3 style={{ color: theme.green }}>
+                    {timerStatus === "finished" && (
+                      <h3 style={{ color: C.green }}>
                         🎉 Great practice!
                       </h3>
                     )}
                   </div>
 
                   <div style={{
-                    display: 'flex',
+                    display: "flex",
                     gap: 10,
-                    justifyContent: 'center',
-                    flexWrap: 'wrap'
+                    justifyContent: "center",
+                    flexWrap: "wrap"
                   }}>
-                    {timerStatus === 'idle' && (
+                    {timerStatus === "idle" && (
                       <button
                         type="button"
-                        style={css.button}
+                        style={S.primary}
                         onClick={startTimer}
                       >
                         ▶ Start Practice
                       </button>
                     )}
 
-                    {timerStatus === 'running' && (
+                    {timerStatus === "running" && (
                       <button
                         type="button"
-                        style={css.button}
+                        style={S.primary}
                         onClick={pauseTimer}
                       >
                         ⏸ Pause
                       </button>
                     )}
 
-                    {timerStatus === 'paused' && (
+                    {timerStatus === "paused" && (
                       <button
                         type="button"
-                        style={css.button}
+                        style={S.primary}
                         onClick={resumeTimer}
                       >
                         ▶ Resume
                       </button>
                     )}
 
-                    {['running', 'paused'].includes(
+                    {["running", "paused"].includes(
                       timerStatus
                     ) && (
                       <button
                         type="button"
-                        style={css.secondary}
+                        style={S.secondary}
                         onClick={finishTimer}
                       >
                         ■ Finish
                       </button>
                     )}
 
-                    {timerStatus !== 'idle' && (
+                    {timerStatus !== "idle" && (
                       <button
                         type="button"
-                        style={css.secondary}
-                        disabled={savingSession}
+                        style={S.secondary}
+                        disabled={saving}
                         onClick={resetTimer}
                       >
                         ↻ Reset
@@ -1498,27 +1392,54 @@ export default function App() {
                     )}
                   </div>
 
-                  {timerStatus === 'finished' && (
+                  {timerStatus === "finished" && (
                     <div style={{
                       marginTop: 25,
-                      borderTop: `1px solid ${theme.border}`,
+                      borderTop: `1px solid ${C.border}`,
                       paddingTop: 20
                     }}>
                       <h3>Save Practice Session</h3>
 
                       <p>
-                        Student:{' '}
-                        <strong>
-                          {selectedStudent?.name}
-                        </strong>
+                        Musician:{" "}
+                        <strong>{selectedStudent?.name}</strong>
                       </p>
-
                       <p>
-                        Actual practice:{' '}
+                        Actual time:{" "}
                         <strong>
                           {formatTime(elapsedSeconds)}
                         </strong>
                       </p>
+
+                      <label htmlFor="category">
+                        Practice Category
+                      </label>
+                      <select
+                        id="category"
+                        style={S.input}
+                        value={category}
+                        onChange={e =>
+                          setCategory(e.target.value)
+                        }
+                      >
+                        {categories.map(item => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+
+                      <label htmlFor="focus">
+                        What did you work on?
+                      </label>
+                      <input
+                        id="focus"
+                        style={S.input}
+                        maxLength={200}
+                        placeholder="Example: C major scale"
+                        value={focus}
+                        onChange={e => setFocus(e.target.value)}
+                      />
 
                       <label htmlFor="notes">
                         Practice Notes (optional)
@@ -1527,96 +1448,80 @@ export default function App() {
                         id="notes"
                         rows={3}
                         maxLength={1000}
-                        style={css.input}
-                        placeholder="What did you practice today?"
+                        style={S.input}
+                        placeholder="What went well today?"
                         value={notes}
-                        onChange={event =>
-                          setNotes(event.target.value)
-                        }
+                        onChange={e => setNotes(e.target.value)}
                       />
 
                       <button
                         type="button"
                         style={{
-                          ...css.button,
-                          width: '100%'
+                          ...S.primary,
+                          width: "100%"
                         }}
-                        disabled={savingSession}
+                        disabled={saving}
                         onClick={savePractice}
                       >
-                        {savingSession
-                          ? 'Saving...'
-                          : '💾 Save to Practice Log'}
+                        {saving
+                          ? "Saving..."
+                          : "💾 Save to Practice Log"}
                       </button>
                     </div>
                   )}
                 </section>
 
-                <section style={css.card}>
+                <section style={S.card}>
                   <h2>📖 Practice Log</h2>
 
                   {!selectedStudentId ? (
-                    <p>Select a student to view their log.</p>
-                  ) : sessions.filter(item =>
-                    item.student_id === selectedStudentId
-                  ).length === 0 ? (
-                    <p>No saved sessions yet.</p>
+                    <p>Select a student to see their history.</p>
+                  ) : studentSessions.length === 0 ? (
+                    <p>No saved practice sessions yet.</p>
                   ) : (
-                    sessions
-                      .filter(item =>
-                        item.student_id === selectedStudentId
-                      )
-                      .map(item => (
-                        <div
-                          key={item.id}
-                          style={{
-                            borderTop:
-                              `1px solid ${theme.border}`,
-                            padding: '14px 0'
-                          }}
-                        >
-                          <strong>
-                            {item.duration_minutes} minutes
-                          </strong>
-                          <p style={{
-                            color: theme.muted,
-                            fontSize: 13
-                          }}>
-                            {new Date(
-                              item.created_at
-                            ).toLocaleString()}
-                          </p>
-                          {item.notes && (
-                            <p>{item.notes}</p>
-                          )}
-                        </div>
-                      ))
+                    studentSessions.map(item => (
+                      <div key={item.id} style={{
+                        borderTop: `1px solid ${C.border}`,
+                        padding: "14px 0"
+                      }}>
+                        <strong>
+                          🎵 {item.minutes} minutes
+                        </strong>
+                        <p style={{
+                          color: C.gray,
+                          fontSize: 13
+                        }}>
+                          {item.practice_date} · {item.category}
+                        </p>
+                        {item.focus && (
+                          <p><strong>Focus:</strong> {item.focus}</p>
+                        )}
+                        {item.notes && (
+                          <p><strong>Notes:</strong> {item.notes}</p>
+                        )}
+                      </div>
+                    ))
                   )}
                 </section>
-              </div>
+              </>
             )}
 
-            {tab === 'progress' && (
-              <section style={css.card}>
+            {tab === "progress" && (
+              <section style={S.card}>
                 <h2>🏆 Weekly Progress</h2>
-                <p style={{ color: theme.muted }}>
-                  Track each student's progress toward
-                  their weekly practice goal.
+                <p style={{ color: C.gray }}>
+                  Practice totals for the current week,
+                  beginning Monday.
                 </p>
 
                 {students.map(student => (
-                  <div
-                    key={student.id}
-                    style={{
-                      padding: '18px 0',
-                      borderBottom:
-                        `1px solid ${theme.border}`
-                    }}
-                  >
+                  <div key={student.id} style={{
+                    padding: "18px 0",
+                    borderBottom: `1px solid ${C.border}`
+                  }}>
                     <h3>{student.name}</h3>
-
-                    <ProgressBar
-                      value={minutesForStudent(
+                    <Progress
+                      value={weeklyMinutes(
                         sessions,
                         student.id
                       )}
@@ -1626,16 +1531,20 @@ export default function App() {
                     />
                   </div>
                 ))}
+
+                {students.length === 0 && (
+                  <p>Add students to track their progress.</p>
+                )}
               </section>
             )}
           </>
         )}
 
         <footer style={{
-          textAlign: 'center',
+          textAlign: "center",
           marginTop: 35,
           paddingBottom: 20,
-          color: theme.muted,
+          color: C.gray,
           fontSize: 12
         }}>
           Practice Pal · Make every practice count.
