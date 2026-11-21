@@ -14,7 +14,7 @@ const supabase =
 const emptyStudent = {
   name: '',
   instrument: '',
-  weekly_goal: '60'
+  weekly_goal_minutes: '60'
 };
 
 const instruments = [
@@ -34,6 +34,9 @@ const instruments = [
   'Other'
 ];
 
+const studentColumns =
+  'id, family_id, name, instrument, weekly_goal_minutes, created_at';
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -52,33 +55,44 @@ export default function App() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [studentForm, setStudentForm] = useState(emptyStudent);
+  const [studentForm, setStudentForm] = useState({
+    ...emptyStudent
+  });
+
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
-  // Initialize authentication.
+  // Initialize Supabase authentication.
   useEffect(() => {
     if (!supabase) {
-      setAuthError('Supabase connection is not configured.');
+      setAuthError(
+        'Supabase connection is not configured.'
+      );
       setAuthLoading(false);
       return;
     }
 
     let active = true;
 
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (!active) return;
+    supabase.auth.getSession().then(
+      ({ data, error }) => {
+        if (!active) return;
 
-      if (error) setAuthError(error.message);
-      setSession(data.session);
-      setAuthLoading(false);
-    });
+        if (error) {
+          setAuthError(error.message);
+        }
+
+        setSession(data.session);
+        setAuthLoading(false);
+      }
+    );
 
     const {
       data: { subscription }
     } = supabase.auth.onAuthStateChange(
       (_event, newSession) => {
         if (!active) return;
+
         setSession(newSession);
         setAuthLoading(false);
       }
@@ -90,7 +104,7 @@ export default function App() {
     };
   }, []);
 
-  // Load the signed-in user's family.
+  // Load the authenticated user's family.
   useEffect(() => {
     const userId = session?.user?.id;
 
@@ -127,7 +141,8 @@ export default function App() {
         );
       } else if (data.length > 1) {
         setFamilyError(
-          'Multiple family memberships found. Please contact support.'
+          'Multiple family memberships were found. ' +
+          'Please contact support.'
         );
       } else {
         setFamilyId(data[0].family_id);
@@ -152,15 +167,14 @@ export default function App() {
     }
 
     let cancelled = false;
+
     setStudentsLoading(true);
     setStudentError('');
 
     async function loadStudents() {
       const { data, error } = await supabase
         .from('students')
-        .select(
-          'id, family_id, name, instrument, weekly_goal, created_at'
-        )
+        .select(studentColumns)
         .eq('family_id', familyId)
         .order('name', { ascending: true });
 
@@ -182,12 +196,11 @@ export default function App() {
     };
   }, [familyId, session?.user?.id]);
 
+  // Refresh student records after a change.
   async function refreshStudents(activeFamilyId) {
     const { data, error } = await supabase
       .from('students')
-      .select(
-        'id, family_id, name, instrument, weekly_goal, created_at'
-      )
+      .select(studentColumns)
       .eq('family_id', activeFamilyId)
       .order('name', { ascending: true });
 
@@ -200,6 +213,7 @@ export default function App() {
     return true;
   }
 
+  // Sign in.
   async function signIn(event) {
     event.preventDefault();
 
@@ -208,16 +222,20 @@ export default function App() {
     setAuthLoading(true);
     setAuthError('');
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
+    const { error } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
 
-    if (error) setAuthError(error.message);
+    if (error) {
+      setAuthError(error.message);
+    }
 
     setAuthLoading(false);
   }
 
+  // Sign out.
   async function signOut() {
     if (!supabase) return;
 
@@ -225,9 +243,12 @@ export default function App() {
 
     const { error } = await supabase.auth.signOut();
 
-    if (error) setAuthError(error.message);
+    if (error) {
+      setAuthError(error.message);
+    }
   }
 
+  // Open the new student form.
   function startAdding() {
     setEditingId(null);
     setStudentForm({ ...emptyStudent });
@@ -236,13 +257,16 @@ export default function App() {
     setFormOpen(true);
   }
 
+  // Open the edit student form.
   function startEditing(student) {
     setEditingId(student.id);
 
     setStudentForm({
       name: student.name ?? '',
       instrument: student.instrument ?? '',
-      weekly_goal: String(student.weekly_goal ?? 60)
+      weekly_goal_minutes: String(
+        student.weekly_goal_minutes ?? 60
+      )
     });
 
     setStudentError('');
@@ -263,6 +287,7 @@ export default function App() {
     }));
   }
 
+  // Create or update a student.
   async function saveStudent(event) {
     event.preventDefault();
 
@@ -270,7 +295,11 @@ export default function App() {
 
     const name = studentForm.name.trim();
     const instrument = studentForm.instrument.trim();
-    const goalText = String(studentForm.weekly_goal).trim();
+
+    const goalText = String(
+      studentForm.weekly_goal_minutes
+    ).trim();
+
     const goal = Number(goalText);
 
     if (!name) {
@@ -302,7 +331,7 @@ export default function App() {
     const studentData = {
       name,
       instrument,
-      weekly_goal: goal
+      weekly_goal_minutes: goal
     };
 
     let result;
@@ -332,7 +361,8 @@ export default function App() {
 
     if (!result.data || result.data.length !== 1) {
       setStudentError(
-        'The change could not be confirmed. Please check permissions.'
+        'The change could not be confirmed. ' +
+        'Please check database permissions.'
       );
       setSaving(false);
       return;
@@ -355,6 +385,7 @@ export default function App() {
     setSaving(false);
   }
 
+  // Delete a student with confirmation.
   async function deleteStudent(student) {
     if (!supabase || !familyId || deletingId) return;
 
@@ -380,21 +411,27 @@ export default function App() {
       setStudentError(error.message);
     } else if (!data || data.length !== 1) {
       setStudentError(
-        'The deletion could not be confirmed. Please check permissions.'
+        'The deletion could not be confirmed. ' +
+        'Please check database permissions.'
       );
     } else {
-      if (editingId === student.id) cancelForm();
+      if (editingId === student.id) {
+        cancelForm();
+      }
 
       const refreshed = await refreshStudents(familyId);
 
       if (refreshed) {
-        setStudentMessage('Student profile deleted.');
+        setStudentMessage(
+          'Student profile deleted successfully.'
+        );
       }
     }
 
     setDeletingId(null);
   }
 
+  // Application styles.
   const styles = {
     page: {
       minHeight: '100vh',
@@ -411,7 +448,8 @@ export default function App() {
       maxWidth: '700px',
       margin: '0 auto',
       boxSizing: 'border-box',
-      boxShadow: '0 8px 30px rgba(0,0,0,0.08)'
+      boxShadow:
+        '0 8px 30px rgba(0,0,0,0.08)'
     },
     header: {
       textAlign: 'center',
@@ -447,7 +485,7 @@ export default function App() {
       padding: '10px 14px',
       border: '1px solid #cbd5e1',
       borderRadius: '8px',
-      background: 'white',
+      background: '#ffffff',
       color: '#1e293b',
       cursor: 'pointer'
     },
@@ -464,7 +502,7 @@ export default function App() {
       borderRadius: '12px',
       padding: '16px',
       marginBottom: '12px',
-      background: 'white'
+      background: '#ffffff'
     },
     error: {
       color: '#b91c1c',
@@ -494,19 +532,23 @@ export default function App() {
           <p>Loading...</p>
         ) : session ? (
           <>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: '12px',
-              marginBottom: '20px'
-            }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '12px',
+                marginBottom: '20px'
+              }}
+            >
               <div>
                 <h2 style={{ marginBottom: '4px' }}>
                   Family Dashboard
                 </h2>
-                <small>{session.user.email}</small>
+                <small>
+                  {session.user.email}
+                </small>
               </div>
 
               <button
@@ -521,7 +563,9 @@ export default function App() {
             {familyLoading ? (
               <p>Loading your family...</p>
             ) : familyError ? (
-              <p style={styles.error}>{familyError}</p>
+              <p style={styles.error}>
+                {familyError}
+              </p>
             ) : !familyId ? (
               <p>Waiting for family information...</p>
             ) : (
@@ -530,20 +574,23 @@ export default function App() {
                   <h3 style={{ marginTop: 0 }}>
                     🏠 Your Family
                   </h3>
+
                   <p>
                     Manage student profiles and weekly
                     music practice goals.
                   </p>
                 </div>
 
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: '12px',
-                  flexWrap: 'wrap',
-                  marginBottom: '16px'
-                }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '12px',
+                    flexWrap: 'wrap',
+                    marginBottom: '16px'
+                  }}
+                >
                   <h3 style={{ margin: 0 }}>
                     🎼 Students ({students.length})
                   </h3>
@@ -585,6 +632,7 @@ export default function App() {
                     <label htmlFor="studentName">
                       Student Name
                     </label>
+
                     <input
                       id="studentName"
                       type="text"
@@ -604,6 +652,7 @@ export default function App() {
                     <label htmlFor="instrument">
                       Instrument
                     </label>
+
                     <select
                       id="instrument"
                       required
@@ -633,6 +682,7 @@ export default function App() {
                     <label htmlFor="weeklyGoal">
                       Weekly Practice Goal (minutes)
                     </label>
+
                     <input
                       id="weeklyGoal"
                       type="number"
@@ -641,20 +691,24 @@ export default function App() {
                       step="1"
                       required
                       style={styles.input}
-                      value={studentForm.weekly_goal}
+                      value={
+                        studentForm.weekly_goal_minutes
+                      }
                       onChange={event =>
                         updateForm(
-                          'weekly_goal',
+                          'weekly_goal_minutes',
                           event.target.value
                         )
                       }
                     />
 
-                    <div style={{
-                      display: 'flex',
-                      gap: '10px',
-                      flexWrap: 'wrap'
-                    }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: '10px',
+                        flexWrap: 'wrap'
+                      }}
+                    >
                       <button
                         type="submit"
                         style={styles.button}
@@ -686,6 +740,7 @@ export default function App() {
                     <p>
                       No student profiles yet.
                     </p>
+
                     <p>
                       Select <strong>+ Add Student</strong>
                       {' '}to create your first profile.
@@ -709,15 +764,17 @@ export default function App() {
 
                         <p>
                           <strong>Weekly Goal:</strong>{' '}
-                          {student.weekly_goal ?? 0}
+                          {student.weekly_goal_minutes ?? 0}
                           {' '}minutes
                         </p>
 
-                        <div style={{
-                          display: 'flex',
-                          gap: '10px',
-                          flexWrap: 'wrap'
-                        }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            gap: '10px',
+                            flexWrap: 'wrap'
+                          }}
+                        >
                           <button
                             type="button"
                             style={styles.secondaryButton}
@@ -754,7 +811,10 @@ export default function App() {
           <form onSubmit={signIn}>
             <h2>Family Sign In</h2>
 
-            <label htmlFor="email">Email</label>
+            <label htmlFor="email">
+              Email
+            </label>
+
             <input
               id="email"
               type="email"
@@ -767,7 +827,10 @@ export default function App() {
               }
             />
 
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">
+              Password
+            </label>
+
             <input
               id="password"
               type="password"
