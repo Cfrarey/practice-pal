@@ -66,6 +66,9 @@ export default function App() {
   useEffect(()=>{let el=document.getElementById('practice-pal-theme-css');if(!el){el=document.createElement('style');el.id='practice-pal-theme-css';document.head.appendChild(el);}el.textContent=themeCss;document.documentElement.dataset.practicePalTheme=theme;try{localStorage.setItem('practice_pal_theme',theme);}catch{}},[theme]);
   const themeButton=<button type="button" style={style.secondary} onClick={()=>setTheme(v=>v==='dark'?'light':'dark')}>{theme==='dark'?'☀️ Light Mode':'🌙 Dark Mode'}</button>;
   const [session,setSession]=useState(null),[authLoading,setAuthLoading]=useState(true);
+  const [invitationSetup,setInvitationSetup]=useState(false),[invitedPassword,setInvitedPassword]=useState(''),[inviteSetupError,setInviteSetupError]=useState('');
+  const [platformAdmin,setPlatformAdmin]=useState(false),[adminView,setAdminView]=useState(false),[adminData,setAdminData]=useState(null),[adminError,setAdminError]=useState(''),[adminBusy,setAdminBusy]=useState(false);
+  const [newInviteEmail,setNewInviteEmail]=useState(''),[newInviteFamily,setNewInviteFamily]=useState('');
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[authError,setAuthError]=useState('');
   const [familyId,setFamilyId]=useState(null),[familyLoading,setFamilyLoading]=useState(false),[familyError,setFamilyError]=useState('');
   const [students,setStudents]=useState([]),[sessions,setSessions]=useState([]),[dataLoading,setDataLoading]=useState(false);
@@ -134,11 +137,16 @@ export default function App() {
         (sessionStorage.getItem('practice_pal_roster')?'splash':'family-login'));
       setAuthLoading(false);
     });
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((event,next)=>{
+      if(event==='PASSWORD_RECOVERY'||(event==='SIGNED_IN'&&window.location.hash.includes('type=invite')))setInvitationSetup(true);
       if(active){setSession(next);setAuthLoading(false);if(!next)setParentUnlocked(false);}
     });
     return()=>{active=false;subscription.unsubscribe();};
   },[]);
+  useEffect(()=>{
+    if(!userId||session?.user?.is_anonymous){setPlatformAdmin(false);return;}
+    supabase.rpc('practice_pal_is_platform_admin').then(({data})=>setPlatformAdmin(data===true));
+  },[userId]);
   useEffect(()=>{
     setFamilyId(null);setFamilyError('');setStudents([]);setSessions([]);setSelectedStudentId('');setStudentError('');setSessionError('');setNotice('');setTab('dashboard');setFormOpen(false);setManualOpen(false);resetClock();
     if(!supabase||!userId||session?.user?.is_anonymous){setFamilyLoading(false);return;}
@@ -146,7 +154,7 @@ export default function App() {
     (async()=>{const {data,error}=await supabase.from('family_members').select('family_id').eq('user_id',userId);
       if(cancelled)return;
       if(error)setFamilyError(error.message);
-      else if(data?.length!==1)setFamilyError('Expected exactly one family membership.');
+      else if(data?.length!==1){setFamilyError('Expected exactly one family membership.');if(data?.length===0)setInvitationSetup(true);}
       else setFamilyId(data[0].family_id);
       setFamilyLoading(false);
     })();
@@ -210,8 +218,14 @@ export default function App() {
       if(!data.user||data.user.is_anonymous)throw new Error('Family account required');
       const {data:members,error:memberError}=await supabase.from('family_members').select('family_id').eq('user_id',data.user.id);
       if(memberError)throw memberError;
-      if(members?.length!==1)throw new Error('Expected exactly one family membership');
-      const {data:roster,error:rosterError}=await supabase.from('students').select('id,name,instrument').eq('family_id',members[0].family_id).order('name');
+      if(members?.length!==1){
+        const {error:claimError}=await supabase.rpc('practice_pal_claim_invitation');
+        if(claimError)throw new Error('No family membership or valid invitation: '+claimError.message);
+      }
+      const {data:actualMembers,error:actualMemberError}=await supabase.from('family_members').select('family_id').eq('user_id',data.user.id);
+      if(actualMemberError)throw actualMemberError;
+      if(actualMembers?.length!==1)throw new Error('Expected exactly one family membership');
+      const {data:roster,error:rosterError}=await supabase.from('students').select('id,name,instrument').eq('family_id',actualMembers[0].family_id).order('name');
       if(rosterError)throw rosterError;
       sessionStorage.setItem('practice_pal_roster',JSON.stringify(roster??[]));
       setPassword('');setParentUnlocked(false);setScreen('splash');
@@ -426,6 +440,56 @@ export default function App() {
     popup.document.open();popup.document.write(html);popup.document.close();
   }
 
+  async function refreshAdmin(){
+    const {data,error}=await supabase.rpc('practice_pal_admin_overview');
+    if(error)setAdminError(error.message);else {setAdminError('');setAdminData(data);}
+  }
+  async function sendFamilyInvite(e){
+    e.preventDefault();if(adminBusy)return;setAdminBusy(true);setAdminError('');
+    try{
+      const {data:{session:active}}=await supabase.auth.getSession();
+      if(!active)throw new Error('Sign in again');
+      const response=await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/family-admin`,{
+        method:'POST',headers:{'Content-Type':'application/json',apikey:import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,Authorization:`Bearer ${active.access_token}`},
+        body:JSON.stringify({action:'invite',email:newInviteEmail,familyName:newInviteFamily})});
+      const result=await response.json();if(!response.ok)throw new Error(result.error||'Invitation failed');
+      setNewInviteEmail('');setNewInviteFamily('');await refreshAdmin();
+    }catch(err){setAdminError(err.message);}finally{setAdminBusy(false);}
+  }
+  async function revokeFamilyInvite(id){
+    if(!window.confirm('Revoke this pending invitation?'))return;
+    setAdminBusy(true);
+    const {error}=await supabase.rpc('practice_pal_admin_revoke_invitation',{p_invitation_id:id});
+    if(error)setAdminError(error.message);else await refreshAdmin();setAdminBusy(false);
+  }
+  async function finishInvitation(e){
+    e.preventDefault();setInviteSetupError('');
+    if(invitedPassword.length<12){setInviteSetupError('Use at least 12 characters.');return;}
+    const {error}=await supabase.auth.updateUser({password:invitedPassword});
+    if(error){setInviteSetupError(error.message);return;}
+    const {error:claimError}=await supabase.rpc('practice_pal_claim_invitation');
+    if(claimError){setInviteSetupError('Password saved, but family activation failed: '+claimError.message);return;}
+    setInvitationSetup(false);setInvitedPassword('');window.history.replaceState({},'',window.location.pathname);
+    window.location.reload();
+  }
+  if(invitationSetup&&session&&!session.user.is_anonymous)return <main style={style.page}><section style={{...style.card,maxWidth:500,margin:'50px auto'}}>
+    <h1>🎵 Activate your Practice Pal invitation</h1><p>Create your family sign-in password. Your separate Parent Mode password will be created after login.</p>
+    <form onSubmit={finishInvitation}><FormField id="invitedPassword" label="New family password (12+ characters)"><input id="invitedPassword" type="password" minLength={12} required style={style.input} value={invitedPassword} onChange={e=>setInvitedPassword(e.target.value)}/></FormField><button style={style.button}>Activate family</button></form>
+    {inviteSetupError&&<p role="alert" style={{color:palette.red}}>{inviteSetupError}</p>}
+  </section></main>;
+  if(adminView&&platformAdmin&&session&&!session.user.is_anonymous)return <main style={style.page}><div style={style.shell}>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h1>🛡️ Practice Pal Administration</h1><div>{themeButton} <button style={style.secondary} onClick={()=>setAdminView(false)}>Back to Practice Pal</button></div></header>
+    <section style={style.card}><h2>Invite a family</h2><p>Invitation only. The invited family creates its own password and receives an isolated family account after verifying its email.</p>
+      <form onSubmit={sendFamilyInvite}><FormField id="familyName" label="Family name"><input id="familyName" style={style.input} required maxLength={100} value={newInviteFamily} onChange={e=>setNewInviteFamily(e.target.value)}/></FormField>
+      <FormField id="familyEmail" label="Family owner's email"><input id="familyEmail" style={style.input} required type="email" value={newInviteEmail} onChange={e=>setNewInviteEmail(e.target.value)}/></FormField>
+      <button style={style.button} disabled={adminBusy}>Send family invitation</button></form>
+      {adminError&&<p role="alert" style={{color:palette.red}}>{adminError}</p>}
+    </section><section style={style.card}><h2>Families</h2><button style={style.secondary} onClick={refreshAdmin}>Refresh</button>
+      {(adminData?.families||[]).map(f=><p key={f.id}><strong>{f.name}</strong> — {f.members} member(s), {f.students} student(s)</p>)}
+    </section><section style={style.card}><h2>Invitations</h2>
+      {(adminData?.invitations||[]).map(i=><div key={i.id} style={{borderBottom:`1px solid ${palette.border}`,padding:'12px 0'}}><strong>{i.family_name}</strong> — {i.email} — {i.status} (expires {new Date(i.expires_at).toLocaleDateString()})
+        {i.status==='pending'&&<button type="button" style={{...style.secondary,marginLeft:12}} disabled={adminBusy} onClick={()=>revokeFamilyInvite(i.id)}>Revoke</button>}</div>)}
+    </section></div></main>;
   if(authLoading||transitioning)return <main style={style.page}>Preparing Practice Pal securely...</main>;
   if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent} theme={theme} onThemeChange={setTheme}/>;
   if(session&&screen==='parent-dashboard'&&!parentUnlocked)return <main style={style.page}><section style={style.card}><p>Parent Mode is locked or has expired.</p><button type="button" style={style.button} onClick={()=>setScreen('parent-login')}>Unlock Parent Mode</button></section></main>;
@@ -458,7 +522,7 @@ export default function App() {
   if(screen!=='parent-dashboard'||!parentUnlocked)return <main style={style.page}>Parent access required.</main>;
 
   return <main style={style.page}><div style={style.shell}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{themeButton}<button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{themeButton}{platformAdmin&&<button type="button" style={style.secondary} onClick={()=>{setAdminView(true);refreshAdmin();}}>🛡️ Platform Admin</button>}<button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
     <nav aria-label="Main navigation" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:10,marginBottom:16}}>{[['dashboard','🏠 Dashboard'],['students','🎼 Students'],['practice','⏱️ Practice'],['progress','🏆 Progress']].map(([id,label])=><button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)} style={{...style.secondary,whiteSpace:'nowrap',fontWeight:700,background:tab===id?palette.blue:surface,color:tab===id?'#fff':palette.navy}}>{label}</button>)}</nav>
     {familyLoading?<div style={style.card}>Loading family...</div>:familyError?<p role="alert" style={{color:palette.red}}>{familyError}</p>:!familyId?<div style={style.card}>Waiting for family information...</div>:<>
       {notice&&<p role="status" style={{background:'#f0fdf4',color:palette.green,padding:14,borderRadius:10}}>{notice}</p>}
