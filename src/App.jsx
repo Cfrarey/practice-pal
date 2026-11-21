@@ -17,11 +17,16 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
-  
+
+  // Family dashboard state
   const [familyMembers, setFamilyMembers] = useState([]);
   const [familyLoading, setFamilyLoading] = useState(false);
   const [familyError, setFamilyError] = useState('');
 
+  // Temporary security test state
+  const [securityResults, setSecurityResults] = useState(null);
+
+  // Load family memberships
   useEffect(() => {
     if (!supabase || !session?.user?.id) {
       setFamilyMembers([]);
@@ -60,8 +65,38 @@ export default function App() {
       cancelled = true;
     };
   }, [session?.user?.id]);
-  
 
+  // Temporary authenticated API security test
+  useEffect(() => {
+    if (!supabase || !session?.user?.id) {
+      setSecurityResults(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSecurityResults(null);
+
+    async function testFamilySecurity() {
+      const { data, error } = await supabase
+        .from('families')
+        .select('id');
+
+      if (cancelled) return;
+
+      setSecurityResults({
+        count: data?.length ?? 0,
+        error: error?.message ?? null
+      });
+    }
+
+    testFamilySecurity();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
+  // Initialize Supabase authentication
   useEffect(() => {
     if (!supabase) {
       setMessage('Supabase connection is not configured.');
@@ -70,21 +105,29 @@ export default function App() {
     }
 
     supabase.auth.getSession().then(({ data, error }) => {
-      if (error) setMessage(error.message);
+      if (error) {
+        setMessage(error.message);
+      }
+
       setSession(data.session);
       setLoading(false);
     });
 
-    const { data: { subscription } } =
-      supabase.auth.onAuthStateChange((_event, newSession) => {
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
         setSession(newSession);
-      });
+      }
+    );
 
     return () => subscription.unsubscribe();
   }, []);
 
+  // Sign in
   async function signIn(event) {
     event.preventDefault();
+
     if (!supabase) return;
 
     setLoading(true);
@@ -95,16 +138,25 @@ export default function App() {
       password
     });
 
-    if (error) setMessage(error.message);
+    if (error) {
+      setMessage(error.message);
+    }
+
     setLoading(false);
   }
 
+  // Sign out
   async function signOut() {
     setMessage('');
+
     const { error } = await supabase.auth.signOut();
-    if (error) setMessage(error.message);
+
+    if (error) {
+      setMessage(error.message);
+    }
   }
 
+  // Application styles
   const styles = {
     page: {
       minHeight: '100vh',
@@ -146,9 +198,11 @@ export default function App() {
   return (
     <main style={styles.page}>
       <section style={styles.card}>
+
         <h1 style={{ textAlign: 'center' }}>
           🎵 Practice Pal
         </h1>
+
         <p style={{ textAlign: 'center', color: '#555' }}>
           Make every practice count.
         </p>
@@ -158,15 +212,21 @@ export default function App() {
         ) : session ? (
           <>
             <h2>Welcome back!</h2>
+
             <p>Signed in as:</p>
-            <p><strong>{session.user.email}</strong></p>
-      
-            <div style={{
-              background: '#f0f5ff',
-              padding: '16px',
-              borderRadius: '12px',
-              marginBottom: '20px'
-            }}>
+            <p>
+              <strong>{session.user.email}</strong>
+            </p>
+
+            {/* Family Dashboard */}
+            <div
+              style={{
+                background: '#f0f5ff',
+                padding: '16px',
+                borderRadius: '12px',
+                marginBottom: '20px'
+              }}
+            >
               <h3>🏠 Your Family Dashboard</h3>
 
               {familyLoading ? (
@@ -177,7 +237,11 @@ export default function App() {
                 </p>
               ) : (
                 <>
-                  <p>Family memberships found: {familyMembers.length}</p>
+                  <p>
+                    Family memberships found:{' '}
+                    {familyMembers.length}
+                  </p>
+
                   <p>
                     {familyMembers.length === 0
                       ? 'No family membership found.'
@@ -187,14 +251,53 @@ export default function App() {
               )}
             </div>
 
-            <button style={styles.button} onClick={signOut}>
+            {/* Temporary Security Test */}
+            <div
+              style={{
+                marginTop: '20px',
+                marginBottom: '20px',
+                padding: '15px',
+                border: '1px solid #ccc',
+                borderRadius: '8px'
+              }}
+            >
+              <h3>🔒 Security Test (Temporary)</h3>
+
+              {securityResults === null ? (
+                <p>
+                  Checking authenticated family access...
+                </p>
+              ) : securityResults.error ? (
+                <p style={{ color: '#b91c1c' }}>
+                  Security test error:{' '}
+                  {securityResults.error}
+                </p>
+              ) : (
+                <p>
+                  Families visible through authenticated API:{' '}
+                  <strong>
+                    {securityResults.count}
+                  </strong>
+                </p>
+              )}
+            </div>
+
+            {/* Sign Out */}
+            <button
+              style={styles.button}
+              onClick={signOut}
+            >
               Sign Out
             </button>
           </>
         ) : (
           <form onSubmit={signIn}>
             <h2>Family Sign In</h2>
-            <label htmlFor="email">Email</label>
+
+            <label htmlFor="email">
+              Email
+            </label>
+
             <input
               id="email"
               type="email"
@@ -205,7 +308,10 @@ export default function App() {
               onChange={e => setEmail(e.target.value)}
             />
 
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">
+              Password
+            </label>
+
             <input
               id="password"
               type="password"
@@ -216,17 +322,24 @@ export default function App() {
               onChange={e => setPassword(e.target.value)}
             />
 
-            <button style={styles.button} type="submit">
+            <button
+              style={styles.button}
+              type="submit"
+            >
               Sign In
             </button>
           </form>
         )}
 
         {message && (
-          <p role="alert" style={{ color: '#b91c1c' }}>
+          <p
+            role="alert"
+            style={{ color: '#b91c1c' }}
+          >
             {message}
           </p>
         )}
+
       </section>
     </main>
   );
