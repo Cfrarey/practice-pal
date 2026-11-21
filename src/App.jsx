@@ -72,6 +72,7 @@ export default function App() {
   const [platformAdmin,setPlatformAdmin]=useState(false),[adminView,setAdminView]=useState(false),[adminData,setAdminData]=useState(null),[adminError,setAdminError]=useState(''),[adminBusy,setAdminBusy]=useState(false);
   const [adminUnlocked,setAdminUnlocked]=useState(false),[adminConfigured,setAdminConfigured]=useState(null),[adminPassword,setAdminPassword]=useState(''),[adminConfirm,setAdminConfirm]=useState('');
   const [newInviteEmail,setNewInviteEmail]=useState(''),[newInviteFamily,setNewInviteFamily]=useState('');
+  const [managedFamily,setManagedFamily]=useState(''),[managedStudents,setManagedStudents]=useState([]),[recoveryMessage,setRecoveryMessage]=useState('');
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[authError,setAuthError]=useState('');
   const [familyId,setFamilyId]=useState(null),[familyLoading,setFamilyLoading]=useState(false),[familyError,setFamilyError]=useState('');
   const [students,setStudents]=useState([]),[sessions,setSessions]=useState([]),[dataLoading,setDataLoading]=useState(false);
@@ -482,6 +483,26 @@ export default function App() {
     const {data,error}=await supabase.rpc('practice_pal_admin_codes_overview');
     if(error){setAdminError(error.message);if(/locked|unlock|authorized/i.test(error.message))setAdminUnlocked(false);}else {setAdminError('');setAdminData(data);}
   }
+  async function selectManagedFamily(id){
+    setManagedFamily(id);setManagedStudents([]);setRecoveryMessage('');setAdminError('');
+    if(!id)return;
+    const {data,error}=await supabase.rpc('practice_pal_admin_family_students',{p_family_id:id});
+    if(error){setAdminError(error.message);if(/unlock|locked/i.test(error.message))setAdminUnlocked(false);}
+    else setManagedStudents(data||[]);
+  }
+  async function recoverAccess(kind,id,action){
+    const family=adminData?.families?.find(f=>f.id===managedFamily);
+    const student=managedStudents.find(s=>s.id===id);
+    const description=kind==='parent'?(action==='require_new_password'?'invalidate the Parent Mode password':'clear the Parent Mode lockout'):(action==='require_new_pin'?'invalidate the student PIN':'clear the student PIN lockout');
+    if(!window.confirm(`Confirm: ${description} for ${student?.name||family?.name||'selected account'}?`))return;
+    setAdminBusy(true);setAdminError('');setRecoveryMessage('');
+    const rpc=kind==='parent'?'practice_pal_admin_recover_parent':'practice_pal_admin_recover_student';
+    const args=kind==='parent'?{p_family_id:id,p_action:action}:{p_student_id:id,p_action:action};
+    const {error}=await supabase.rpc(rpc,args);
+    if(error){setAdminError(error.message);if(/unlock|locked/i.test(error.message))setAdminUnlocked(false);}
+    else {if(managedFamily)await selectManagedFamily(managedFamily);setRecoveryMessage('Recovery action completed.');}
+    setAdminBusy(false);
+  }
   async function createFamilyCode(e){
     e.preventDefault();if(adminBusy)return;setAdminBusy(true);setAdminError('');setIssuedCode('');
     try{
@@ -530,6 +551,16 @@ export default function App() {
       {adminError&&<p role="alert" style={{color:palette.red}}>{adminError}</p>}
     </section><section style={style.card}><h2>Families</h2><button style={style.secondary} onClick={refreshAdmin}>Refresh</button>
       {(adminData?.families||[]).map(f=><p key={f.id}><strong>{f.name}</strong> — {f.members} member(s), {f.students} student(s)</p>)}
+    </section><section style={style.card}><h2>Family Account Recovery</h2>
+      <p>Recovery actions are audited and require your separate Platform Admin unlock. Parent Mode passwords and student PINs are never displayed.</p>
+      <FormField id="managedFamily" label="Select family"><select id="managedFamily" style={style.input} value={managedFamily} onChange={e=>selectManagedFamily(e.target.value)}><option value="">Choose a family</option>{(adminData?.families||[]).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></FormField>
+      {managedFamily&&<><h3>Parent Mode</h3><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        <button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>recoverAccess('parent',managedFamily,'clear_lockout')}>Clear Parent Lockout</button>
+        <button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>recoverAccess('parent',managedFamily,'require_new_password')}>Reset Parent Password</button>
+      </div><p style={{fontSize:12,color:palette.gray}}>Reset invalidates the current password and all Parent Mode unlocks. The family owner must set a new password.</p>
+      <h3>Student PINs</h3>{managedStudents.length===0?<p>No students found.</p>:managedStudents.map(s=><div key={s.id} style={{borderTop:`1px solid ${palette.border}`,padding:'12px 0'}}><strong>{s.name}</strong> — {s.has_pin?'PIN configured':'PIN not configured'}<div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:8}}><button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>recoverAccess('student',s.id,'clear_lockout')}>Clear PIN Lockout</button><button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>recoverAccess('student',s.id,'require_new_pin')}>Reset PIN</button></div></div>)}
+      <p style={{fontSize:12,color:palette.gray}}>A parent must set a new PIN after a reset. Existing student PIN sessions are revoked.</p></>}
+      {recoveryMessage&&<p role="status">{recoveryMessage}</p>}
     </section><section style={style.card}><h2>Activation codes</h2>
       {(adminData?.codes||[]).map(c=><div key={c.id} style={{borderBottom:`1px solid ${palette.border}`,padding:'12px 0'}}><strong>{c.family_name}</strong> — {c.email} — {c.status} (expires {new Date(c.expires_at).toLocaleDateString()})
         {c.status==='pending'&&<button type="button" style={{...style.secondary,marginLeft:12}} disabled={adminBusy} onClick={()=>revokeFamilyCode(c.id)}>Revoke</button>}</div>)}
