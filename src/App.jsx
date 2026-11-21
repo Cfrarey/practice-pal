@@ -17,6 +17,50 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  
+  const [familyMembers, setFamilyMembers] = useState([]);
+  const [familyLoading, setFamilyLoading] = useState(false);
+  const [familyError, setFamilyError] = useState('');
+
+  useEffect(() => {
+    if (!supabase || !session?.user?.id) {
+      setFamilyMembers([]);
+      setFamilyError('');
+      setFamilyLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const userId = session.user.id;
+
+    async function loadFamily() {
+      setFamilyMembers([]);
+      setFamilyError('');
+      setFamilyLoading(true);
+
+      const { data, error } = await supabase
+        .from('family_members')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (cancelled) return;
+
+      if (error) {
+        setFamilyError(error.message);
+      } else {
+        setFamilyMembers(data ?? []);
+      }
+
+      setFamilyLoading(false);
+    }
+
+    loadFamily();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+  
 
   useEffect(() => {
     if (!supabase) {
