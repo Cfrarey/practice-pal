@@ -5,20 +5,21 @@ const supabase = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPAB
   ? createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY)
   : null;
 const studentColumns = 'id,family_id,name,instrument,weekly_goal_minutes,created_at';
-const sessionColumns = 'id,family_id,student_id,practice_date,minutes,category,focus,notes,created_at';
+const sessionColumns = 'id,family_id,student_id,practice_date,minutes,category,focus,notes,teacher_notes,created_at';
 const instruments = ['Piano','Guitar','Violin','Viola','Cello','Flute','Clarinet','Saxophone','Trumpet','Trombone','French Horn','Drums','Percussion','Voice','Other'];
 const categories = ['Other','Warm-up','Scales','Technique','Repertoire','Sight Reading','Ear Training','Performance Preparation'];
-const palette = { navy:'#172554',blue:'#2563eb',purple:'#7c3aed',bg:'#f3f6ff',gray:'#64748b',border:'#e2e8f0',green:'#15803d',red:'#b91c1c' };
+const palette = { navy:'var(--pp-text)',blue:'var(--pp-accent)',purple:'var(--pp-purple)',bg:'var(--pp-bg)',gray:'var(--pp-muted)',border:'var(--pp-border)',green:'var(--pp-green)',red:'var(--pp-red)' };
+const surface='var(--pp-surface)';
 const style = {
   page:{minHeight:'100vh',background:palette.bg,color:palette.navy,fontFamily:'Arial,sans-serif',padding:'20px 14px',boxSizing:'border-box'},
   shell:{maxWidth:1100,margin:'0 auto'},
-  card:{background:'#fff',border:`1px solid ${palette.border}`,borderRadius:18,padding:22,marginBottom:16},
+  card:{background:surface,border:`1px solid ${palette.border}`,borderRadius:18,padding:22,marginBottom:16},
   button:{background:palette.blue,color:'#fff',border:0,borderRadius:10,padding:'12px 18px',fontSize:15,fontWeight:700,cursor:'pointer'},
-  secondary:{background:'#fff',color:palette.navy,border:`1px solid ${palette.border}`,borderRadius:10,padding:'11px 15px',cursor:'pointer'},
-  input:{display:'block',width:'100%',boxSizing:'border-box',padding:12,marginTop:6,marginBottom:16,border:`1px solid ${palette.border}`,borderRadius:10,fontSize:16,background:'#fff'}
+  secondary:{background:surface,color:palette.navy,border:`1px solid ${palette.border}`,borderRadius:10,padding:'11px 15px',cursor:'pointer'},
+  input:{display:'block',width:'100%',boxSizing:'border-box',padding:12,marginTop:6,marginBottom:16,border:`1px solid ${palette.border}`,borderRadius:10,fontSize:16,background:surface,color:palette.navy}
 };
 const blankStudent = {name:'',instrument:'',weekly_goal_minutes:'60'};
-const blankEntry = {student_id:'',practice_date:'',minutes:'',category:'Other',focus:'',notes:''};
+const blankEntry = {student_id:'',practice_date:'',minutes:'',category:'Other',focus:'',notes:'',teacher_notes:''};
 function localDate(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 }
@@ -54,7 +55,16 @@ function Progress({value,goal}) {
 }
 function FormField({label,id,children}) {return <label htmlFor={id} style={{display:'block',fontWeight:600}}>{label}{children}</label>;}
 
+const themeCss = `
+:root{--pp-text:#172554;--pp-accent:#2563eb;--pp-purple:#7c3aed;--pp-bg:#f3f6ff;--pp-surface:#ffffff;--pp-muted:#64748b;--pp-border:#e2e8f0;--pp-green:#15803d;--pp-red:#b91c1c;color-scheme:light}
+:root[data-practice-pal-theme=dark]{--pp-text:#e8efff;--pp-accent:#3b82f6;--pp-purple:#a78bfa;--pp-bg:#0f172a;--pp-surface:#1e293b;--pp-muted:#aab9ce;--pp-border:#475569;--pp-green:#86efac;--pp-red:#fca5a5;color-scheme:dark}
+:root[data-practice-pal-theme=dark] input,:root[data-practice-pal-theme=dark] select,:root[data-practice-pal-theme=dark] textarea{color:var(--pp-text);background:var(--pp-surface);border-color:var(--pp-border)}
+:root[data-practice-pal-theme=dark] input::placeholder,:root[data-practice-pal-theme=dark] textarea::placeholder{color:var(--pp-muted)}
+`;
 export default function App() {
+  const [theme,setTheme]=useState(()=>{try{return localStorage.getItem('practice_pal_theme')==='dark'?'dark':'light';}catch{return 'light';}});
+  useEffect(()=>{let el=document.getElementById('practice-pal-theme-css');if(!el){el=document.createElement('style');el.id='practice-pal-theme-css';document.head.appendChild(el);}el.textContent=themeCss;document.documentElement.dataset.practicePalTheme=theme;try{localStorage.setItem('practice_pal_theme',theme);}catch{}},[theme]);
+  const themeButton=<button type="button" style={style.secondary} onClick={()=>setTheme(v=>v==='dark'?'light':'dark')}>{theme==='dark'?'☀️ Light Mode':'🌙 Dark Mode'}</button>;
   const [session,setSession]=useState(null),[authLoading,setAuthLoading]=useState(true);
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[authError,setAuthError]=useState('');
   const [familyId,setFamilyId]=useState(null),[familyLoading,setFamilyLoading]=useState(false),[familyError,setFamilyError]=useState('');
@@ -68,6 +78,8 @@ export default function App() {
   const [parentOldPassword,setParentOldPassword]=useState(''),[familyNewPassword,setFamilyNewPassword]=useState('');
   const [studentForm,setStudentForm]=useState({...blankStudent}),[editingId,setEditingId]=useState(null),[formOpen,setFormOpen]=useState(false);
   const [manualOpen,setManualOpen]=useState(false),[entry,setEntry]=useState({...blankEntry,practice_date:localDate()});
+  const [editPractice,setEditPractice]=useState(null);
+  const [editPracticeForm,setEditPracticeForm]=useState({...blankEntry});
   const [selectedStudentId,setSelectedStudentId]=useState(''),[timerMode,setTimerMode]=useState('up'),[targetMinutes,setTargetMinutes]=useState(15);
   const [timerStatus,setTimerStatus]=useState('idle'),[elapsedSeconds,setElapsedSeconds]=useState(0);
   const [category,setCategory]=useState('Other'),[focus,setFocus]=useState(''),[notes,setNotes]=useState('');
@@ -296,7 +308,34 @@ export default function App() {
     if(!/^\d{4}-\d{2}-\d{2}$/.test(entry.practice_date)||localDate(parseLocalDate(entry.practice_date))!==entry.practice_date||entry.practice_date>localDate()){
       setSessionError('Choose a valid practice date that is not in the future.');return;
     }
-    await insertPractice({family_id:familyId,student_id:student.id,practice_date:entry.practice_date,minutes,category:entry.category,focus:entry.focus.trim()||null,notes:entry.notes.trim()||null},'manual');
+    await insertPractice({family_id:familyId,student_id:student.id,practice_date:entry.practice_date,minutes,category:entry.category,focus:entry.focus.trim()||null,notes:entry.notes.trim()||null,teacher_notes:entry.teacher_notes.trim()||null},'manual');
+  }
+  function beginEditPractice(record){
+    setSessionError('');setNotice('');setEditPractice(record.id);
+    setEditPracticeForm({student_id:record.student_id,practice_date:record.practice_date,minutes:String(record.minutes),category:record.category||'Other',focus:record.focus||'',notes:record.notes||'',teacher_notes:record.teacher_notes||''});
+  }
+  async function savePracticeEdit(e){
+    e.preventDefault();if(busy||!familyId||!editPractice)return;
+    const minutes=Number(editPracticeForm.minutes);
+    if(!Number.isSafeInteger(minutes)||minutes<1||minutes>1440){setSessionError('Minutes must be a whole number from 1 to 1440.');return;}
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(editPracticeForm.practice_date)||localDate(parseLocalDate(editPracticeForm.practice_date))!==editPracticeForm.practice_date||editPracticeForm.practice_date>localDate()){
+      setSessionError('Enter a valid date that is not in the future.');return;
+    }
+    setBusy(true);setSessionError('');
+    const {data,error}=await supabase.from('practice_sessions').update({practice_date:editPracticeForm.practice_date,minutes,category:editPracticeForm.category,focus:editPracticeForm.focus.trim()||null,notes:editPracticeForm.notes.trim()||null,teacher_notes:editPracticeForm.teacher_notes.trim()||null}).eq('id',editPractice).eq('family_id',familyId).eq('student_id',editPracticeForm.student_id).select('id');
+    if(error)setSessionError(error.message);
+    else if(data?.length!==1)setSessionError('Update was not confirmed. Check Parent Mode authorization and try again.');
+    else{setEditPractice(null);await refreshSessions();setNotice('Practice entry updated.');}
+    setBusy(false);
+  }
+  async function deletePracticeRecord(record){
+    if(busy||!familyId||!window.confirm(`Permanently delete the ${record.minutes}-minute practice entry from ${record.practice_date}?`))return;
+    setBusy(true);setSessionError('');
+    const {data,error}=await supabase.from('practice_sessions').delete().eq('id',record.id).eq('family_id',familyId).eq('student_id',record.student_id).select('id');
+    if(error)setSessionError(error.message);
+    else if(data?.length!==1)setSessionError('Deletion was not confirmed. Check Parent Mode authorization.');
+    else{if(editPractice===record.id)setEditPractice(null);await refreshSessions();setNotice('Practice entry deleted.');}
+    setBusy(false);
   }
   function addStudent(){setEditingId(null);setStudentForm({...blankStudent});setFormOpen(true);setStudentError('');setTab('students');}
   function editStudent(student){setEditingId(student.id);setStudentForm({name:student.name??'',instrument:student.instrument??'',weekly_goal_minutes:String(student.weekly_goal_minutes??60)});setFormOpen(true);setStudentError('');setTab('students');}
@@ -375,7 +414,7 @@ export default function App() {
       const d=new Date(reportStart);d.setDate(d.getDate()+i);const date=localDate(d);
       const records=weekSessions.filter(s=>s.practice_date===date);
       const mins=records.reduce((sum,s)=>sum+Number(s.minutes||0),0);
-      const details=records.map(s=>`${names[s.student_id]??'Student'}: ${s.category}${s.focus?' — '+s.focus:''}${s.notes?' ('+s.notes+')':''}`).join('; ');
+      const details=records.map(s=>`${names[s.student_id]??'Student'}: ${s.category}${s.focus?' — '+s.focus:''}${s.notes?' ('+s.notes+')':''}${s.teacher_notes?' | Teacher: '+s.teacher_notes:''}`).join('; ');
       return `<tr><td>${day}<br><small>${safe(date)}</small></td><td>${mins||'—'}</td><td>${safe(details)||'—'}</td></tr>`;
     }).join('');
     const studentSummary=reportStudents.map(s=>`<tr><td>${safe(s.name)}</td><td>${safe(s.instrument)}</td><td>${weeklyMinutes(weekSessions,s.id,reportStart)}</td><td>${Number(s.weekly_goal_minutes)||0}</td></tr>`).join('');
@@ -388,10 +427,10 @@ export default function App() {
   }
 
   if(authLoading||transitioning)return <main style={style.page}>Preparing Practice Pal securely...</main>;
-  if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent}/>;
+  if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent} theme={theme} onThemeChange={setTheme}/>;
   if(session&&screen==='parent-dashboard'&&!parentUnlocked)return <main style={style.page}><section style={style.card}><p>Parent Mode is locked or has expired.</p><button type="button" style={style.button} onClick={()=>setScreen('parent-login')}>Unlock Parent Mode</button></section></main>;
   if(session&&screen==='splash')return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,width:'100%',maxWidth:720,textAlign:'center'}}>
-    <h1>🎵 Welcome to Practice Pal!</h1><p>Who's using Practice Pal today?</p>
+    <h1>🎵 Welcome to Practice Pal!</h1>{themeButton}<p>Who's using Practice Pal today?</p>
     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:16}}>
       <section style={style.card}><h2>🎹 Student</h2><p>Choose your profile and enter your PIN.</p><button style={style.button} onClick={enterStudentMode}>Student Practice</button></section>
       <section style={style.card}><h2>🛡️ Parent</h2><p>Enter the separate parent password.</p><button style={style.button} onClick={()=>{setAuthError('');setScreen('parent-login');}}>Unlock Parent Dashboard</button></section>
@@ -399,7 +438,7 @@ export default function App() {
     <button style={style.secondary} onClick={signOut}>Sign Out of Family</button>
   </section></main>;
   if(session&&screen==='parent-login')return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,maxWidth:440,width:'100%'}}>
-    <h1>🔒 {parentConfigured===false?'Create Parent Password':'Unlock Parent Dashboard'}</h1>
+    {themeButton}<h1>🔒 {parentConfigured===false?'Create Parent Password':'Unlock Parent Dashboard'}</h1>
     {familyLoading||parentConfigured===null?<p>Checking parent security...</p>:<form onSubmit={unlockParent}>
       <FormField label={parentConfigured===false?'New parent password (12+ characters)':'Parent password'} id="parentSecret"><input id="parentSecret" type="password" required minLength={parentConfigured===false?12:1} autoComplete="off" style={style.input} value={parentPassword} onChange={e=>setParentPassword(e.target.value)}/></FormField>
       {parentConfigured===false&&<FormField label="Confirm new parent password" id="parentConfirm"><input id="parentConfirm" type="password" required minLength={12} autoComplete="off" style={style.input} value={parentPasswordConfirm} onChange={e=>setParentPasswordConfirm(e.target.value)}/></FormField>}
@@ -409,7 +448,7 @@ export default function App() {
     <button style={{...style.secondary,marginTop:12}} onClick={()=>{setParentPassword('');setScreen('splash');}}>Back to Welcome</button>
   </section></main>;
   if(!session)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,maxWidth:420,width:'100%'}}>
-    <h1>🎵 Practice Pal</h1><h2>Family Sign In</h2>
+    <h1>🎵 Practice Pal</h1>{themeButton}<h2>Family Sign In</h2>
     <form onSubmit={signIn}>
       <FormField label="Family email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField>
       <FormField label="Family password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField>
@@ -419,8 +458,8 @@ export default function App() {
   if(screen!=='parent-dashboard'||!parentUnlocked)return <main style={style.page}>Parent access required.</main>;
 
   return <main style={style.page}><div style={style.shell}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
-    <nav aria-label="Main navigation" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:10,marginBottom:16}}>{[['dashboard','🏠 Dashboard'],['students','🎼 Students'],['practice','⏱️ Practice'],['progress','🏆 Progress']].map(([id,label])=><button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)} style={{...style.secondary,whiteSpace:'nowrap',fontWeight:700,background:tab===id?palette.navy:'#fff',color:tab===id?'#fff':palette.navy}}>{label}</button>)}</nav>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{themeButton}<button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
+    <nav aria-label="Main navigation" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:10,marginBottom:16}}>{[['dashboard','🏠 Dashboard'],['students','🎼 Students'],['practice','⏱️ Practice'],['progress','🏆 Progress']].map(([id,label])=><button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)} style={{...style.secondary,whiteSpace:'nowrap',fontWeight:700,background:tab===id?palette.blue:surface,color:tab===id?'#fff':palette.navy}}>{label}</button>)}</nav>
     {familyLoading?<div style={style.card}>Loading family...</div>:familyError?<p role="alert" style={{color:palette.red}}>{familyError}</p>:!familyId?<div style={style.card}>Waiting for family information...</div>:<>
       {notice&&<p role="status" style={{background:'#f0fdf4',color:palette.green,padding:14,borderRadius:10}}>{notice}</p>}
       {studentError&&<p role="alert" style={{background:'#fef2f2',color:palette.red,padding:14,borderRadius:10}}>Student: {studentError}</p>}
@@ -455,16 +494,16 @@ export default function App() {
       </section>}
       {tab==='practice'&&<>
         <section style={{...style.card,maxWidth:650,margin:'0 auto 20px'}}><h2>⏱️ Practice Timer</h2><FormField label="Select Musician" id="practiceStudent"><select id="practiceStudent" style={style.input} value={selectedStudentId} disabled={timerStatus!=='idle'} onChange={e=>setSelectedStudentId(e.target.value)}><option value="">Choose a student</option>{students.map(s=><option key={s.id} value={s.id}>{s.name} — {s.instrument}</option>)}</select></FormField>
-          <div style={{display:'flex',gap:10,marginBottom:20}}>{[['up','Count Up'],['down','Countdown']].map(([value,label])=><button key={value} type="button" disabled={timerStatus!=='idle'} onClick={()=>{setTimerMode(value);resetClock();}} style={{...style.secondary,flex:1,fontWeight:700,background:timerMode===value?palette.navy:'#fff',color:timerMode===value?'#fff':palette.navy}}>{label}</button>)}</div>
+          <div style={{display:'flex',gap:10,marginBottom:20}}>{[['up','Count Up'],['down','Countdown']].map(([value,label])=><button key={value} type="button" disabled={timerStatus!=='idle'} onClick={()=>{setTimerMode(value);resetClock();}} style={{...style.secondary,flex:1,fontWeight:700,background:timerMode===value?palette.blue:surface,color:timerMode===value?'#fff':palette.navy}}>{label}</button>)}</div>
           {timerMode==='down'&&<><FormField label="Countdown Duration (minutes)" id="duration"><input id="duration" type="number" min="1" max="240" step="1" style={style.input} disabled={timerStatus!=='idle'} value={targetMinutes} onChange={e=>{const n=Number(e.target.value);if(Number.isSafeInteger(n)&&n>=1&&n<=240)setTargetMinutes(n);}}/></FormField><div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:18}}>{[5,10,15,20,30].map(n=><button key={n} type="button" disabled={timerStatus!=='idle'} style={style.secondary} onClick={()=>setTargetMinutes(n)}>{n} min</button>)}</div></>}
           <div style={{background:palette.bg,borderRadius:20,padding:'32px 12px',textAlign:'center',marginBottom:20}}><div style={{fontSize:'clamp(48px,10vw,76px)',fontWeight:800,fontVariantNumeric:'tabular-nums'}}>{display}</div><p style={{color:palette.gray}}>{timerMode==='down'?'Time Remaining':'Practice Time'}</p>{timerStatus==='finished'&&<h3 style={{color:palette.green}}>🎉 Great practice!</h3>}</div>
           <div style={{display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>{timerStatus==='idle'&&<button type="button" style={style.button} onClick={startTimer}>▶ Start Practice</button>}{timerStatus==='running'&&<button type="button" style={style.button} onClick={pauseTimer}>⏸ Pause</button>}{timerStatus==='paused'&&<button type="button" style={style.button} onClick={resumeTimer}>▶ Resume</button>}{['running','paused'].includes(timerStatus)&&<button type="button" style={style.secondary} onClick={finishTimer}>■ Finish</button>}{timerStatus!=='idle'&&<button type="button" style={style.secondary} disabled={busy} onClick={resetTimer}>↻ Reset</button>}</div>
           {timerStatus==='finished'&&<div style={{marginTop:25,borderTop:`1px solid ${palette.border}`,paddingTop:20}}><h3>Save Practice Session</h3><p>Musician: <strong>{selectedStudent?.name}</strong></p><p>Actual time: <strong>{formatClock(elapsedSeconds)}</strong></p><FormField label="Practice Category" id="category"><select id="category" style={style.input} value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select></FormField><FormField label="What were you practicing?" id="focus"><input id="focus" style={style.input} maxLength={200} placeholder="Example: C major scale" value={focus} onChange={e=>setFocus(e.target.value)}/></FormField><FormField label="Other Notes" id="notes"><textarea id="notes" rows={3} maxLength={1000} style={style.input} placeholder="What went well? What needs work?" value={notes} onChange={e=>setNotes(e.target.value)}/></FormField><button type="button" style={{...style.button,width:'100%'}} disabled={busy} onClick={saveTimer}>{busy?'Saving...':'💾 Save to Practice Log'}</button></div>}
         </section>
         <section style={style.card}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:10}}><h2>➕ Manual Practice Entry</h2><button type="button" style={style.button} onClick={()=>{if(manualOpen)setManualOpen(false);else openManual();}}>{manualOpen?'Close Form':'+ Add Practice Time'}</button></div>
-          {manualOpen&&<form onSubmit={saveManual} style={{background:palette.bg,padding:18,borderRadius:14}}><FormField label="Student" id="manualStudent"><select id="manualStudent" required style={style.input} value={entry.student_id} onChange={e=>setEntry(p=>({...p,student_id:e.target.value}))}><option value="">Choose a student</option>{students.map(s=><option key={s.id} value={s.id}>{s.name} — {s.instrument}</option>)}</select></FormField><FormField label="Practice Date" id="manualDate"><input id="manualDate" type="date" required max={localDate()} style={style.input} value={entry.practice_date} onChange={e=>setEntry(p=>({...p,practice_date:e.target.value}))}/></FormField><FormField label="Minutes Practiced" id="manualMinutes"><input id="manualMinutes" type="number" min="1" max="1440" step="1" required style={style.input} value={entry.minutes} onChange={e=>setEntry(p=>({...p,minutes:e.target.value}))}/></FormField><FormField label="Practice Category" id="manualCategory"><select id="manualCategory" style={style.input} value={entry.category} onChange={e=>setEntry(p=>({...p,category:e.target.value}))}>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select></FormField><FormField label="What were you practicing?" id="manualFocus"><input id="manualFocus" style={style.input} maxLength={200} placeholder="Example: Concert piece, measures 12–24" value={entry.focus} onChange={e=>setEntry(p=>({...p,focus:e.target.value}))}/></FormField><FormField label="Other Notes" id="manualNotes"><textarea id="manualNotes" rows={3} maxLength={1000} style={style.input} placeholder="Optional notes" value={entry.notes} onChange={e=>setEntry(p=>({...p,notes:e.target.value}))}/></FormField><div style={{display:'flex',gap:10,flexWrap:'wrap'}}><button type="submit" disabled={busy} style={style.button}>{busy?'Saving...':'💾 Save Manual Entry'}</button><button type="button" disabled={busy} style={style.secondary} onClick={()=>setManualOpen(false)}>Cancel</button></div></form>}
+          {manualOpen&&<form onSubmit={saveManual} style={{background:palette.bg,padding:18,borderRadius:14}}><FormField label="Student" id="manualStudent"><select id="manualStudent" required style={style.input} value={entry.student_id} onChange={e=>setEntry(p=>({...p,student_id:e.target.value}))}><option value="">Choose a student</option>{students.map(s=><option key={s.id} value={s.id}>{s.name} — {s.instrument}</option>)}</select></FormField><FormField label="Practice Date" id="manualDate"><input id="manualDate" type="date" required max={localDate()} style={style.input} value={entry.practice_date} onChange={e=>setEntry(p=>({...p,practice_date:e.target.value}))}/></FormField><FormField label="Minutes Practiced" id="manualMinutes"><input id="manualMinutes" type="number" min="1" max="1440" step="1" required style={style.input} value={entry.minutes} onChange={e=>setEntry(p=>({...p,minutes:e.target.value}))}/></FormField><FormField label="Practice Category" id="manualCategory"><select id="manualCategory" style={style.input} value={entry.category} onChange={e=>setEntry(p=>({...p,category:e.target.value}))}>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select></FormField><FormField label="What were you practicing?" id="manualFocus"><input id="manualFocus" style={style.input} maxLength={200} placeholder="Example: Concert piece, measures 12–24" value={entry.focus} onChange={e=>setEntry(p=>({...p,focus:e.target.value}))}/></FormField><FormField label="Other Notes" id="manualNotes"><textarea id="manualNotes" rows={3} maxLength={1000} style={style.input} placeholder="Optional notes" value={entry.notes} onChange={e=>setEntry(p=>({...p,notes:e.target.value}))}/></FormField><FormField label="Notes to the Teacher (included in weekly PDF)" id="manualTeacherNotes"><textarea id="manualTeacherNotes" rows={3} maxLength={2000} style={style.input} placeholder="Questions, accomplishments, or areas where teacher feedback is needed" value={entry.teacher_notes} onChange={e=>setEntry(p=>({...p,teacher_notes:e.target.value}))}/></FormField><div style={{display:'flex',gap:10,flexWrap:'wrap'}}><button type="submit" disabled={busy} style={style.button}>{busy?'Saving...':'💾 Save Manual Entry'}</button><button type="button" disabled={busy} style={style.secondary} onClick={()=>setManualOpen(false)}>Cancel</button></div></form>}
         </section>
-        <section style={style.card}><h2>📖 Practice Log</h2><p style={{color:palette.gray}}>Choose a student in the timer selector above to view their saved sessions.</p>{!selectedStudentId?<p>Select a student to see their history.</p>:selectedSessions.length===0?<p>No saved sessions yet.</p>:selectedSessions.map(s=><div key={s.id} style={{borderTop:`1px solid ${palette.border}`,padding:'14px 0'}}><strong>🎵 {s.minutes} minutes</strong><p style={{color:palette.gray,fontSize:13}}>{s.practice_date} · {s.category}</p>{s.focus&&<p><strong>Practiced:</strong> {s.focus}</p>}{s.notes&&<p><strong>Other Notes:</strong> {s.notes}</p>}</div>)}</section>
+        <section style={style.card}><h2>📖 Practice Log</h2><p style={{color:palette.gray}}>Choose a student in the timer selector above to view their saved sessions.</p>{!selectedStudentId?<p>Select a student to see their history.</p>:selectedSessions.length===0?<p>No saved sessions yet.</p>:selectedSessions.map(s=><div key={s.id} style={{borderTop:`1px solid ${palette.border}`,padding:'14px 0'}}><strong>🎵 {s.minutes} minutes</strong><p style={{color:palette.gray,fontSize:13}}>{s.practice_date} · {s.category}</p>{s.focus&&<p><strong>Practiced:</strong> {s.focus}</p>}{s.notes&&<p><strong>Other Notes:</strong> {s.notes}</p>}{s.teacher_notes&&<p><strong>Notes to Teacher:</strong> {s.teacher_notes}</p>}<div style={{display:'flex',gap:8,flexWrap:'wrap'}}><button type="button" disabled={busy} style={style.secondary} onClick={()=>beginEditPractice(s)}>✏️ Edit</button><button type="button" disabled={busy} style={{...style.secondary,color:palette.red}} onClick={()=>deletePracticeRecord(s)}>🗑️ Delete</button></div>{editPractice===s.id&&<form onSubmit={savePracticeEdit} style={{background:palette.bg,padding:14,marginTop:12,borderRadius:12}}><h3>Edit Practice Entry</h3><FormField label="Date" id={`editDate-${s.id}`}><input id={`editDate-${s.id}`} type="date" max={localDate()} required style={style.input} value={editPracticeForm.practice_date} onChange={e=>setEditPracticeForm(p=>({...p,practice_date:e.target.value}))}/></FormField><FormField label="Minutes" id={`editMinutes-${s.id}`}><input id={`editMinutes-${s.id}`} type="number" min="1" max="1440" required style={style.input} value={editPracticeForm.minutes} onChange={e=>setEditPracticeForm(p=>({...p,minutes:e.target.value}))}/></FormField><FormField label="Category" id={`editCategory-${s.id}`}><select id={`editCategory-${s.id}`} style={style.input} value={editPracticeForm.category} onChange={e=>setEditPracticeForm(p=>({...p,category:e.target.value}))}>{categories.map(c=><option key={c}>{c}</option>)}</select></FormField><FormField label="Practiced" id={`editFocus-${s.id}`}><input id={`editFocus-${s.id}`} maxLength={200} style={style.input} value={editPracticeForm.focus} onChange={e=>setEditPracticeForm(p=>({...p,focus:e.target.value}))}/></FormField><FormField label="Other Notes" id={`editNotes-${s.id}`}><textarea id={`editNotes-${s.id}`} rows={2} maxLength={1000} style={style.input} value={editPracticeForm.notes} onChange={e=>setEditPracticeForm(p=>({...p,notes:e.target.value}))}/></FormField><FormField label="Notes to the Teacher" id={`editTeacher-${s.id}`}><textarea id={`editTeacher-${s.id}`} rows={3} maxLength={2000} style={style.input} value={editPracticeForm.teacher_notes} onChange={e=>setEditPracticeForm(p=>({...p,teacher_notes:e.target.value}))}/></FormField><button type="submit" disabled={busy} style={style.button}>Save Changes</button> <button type="button" disabled={busy} style={style.secondary} onClick={()=>setEditPractice(null)}>Cancel</button></form>}</div>)}</section>
       </>}
       {tab==='progress'&&<section style={style.card}><h2>🏆 Weekly Progress</h2><p style={{color:palette.gray}}>Current week: {formatDate(thisMonday)} – {formatDate(sundayOf(thisMonday))}</p>{students.map(s=><div key={s.id} style={{padding:'18px 0',borderBottom:`1px solid ${palette.border}`}}><h3>{s.name}</h3><Progress value={weeklyMinutes(sessions,s.id,thisMonday)} goal={Number(s.weekly_goal_minutes)||0}/><button type="button" style={{...style.secondary,marginTop:12}} onClick={()=>openManual(s.id)}>+ Add Practice</button></div>)}{students.length===0&&<p>Add students to track progress.</p>}</section>}
     </>}
@@ -472,7 +511,7 @@ export default function App() {
   </div></main>;
 }
 
-function StudentPortal({ onReturn }) {
+function StudentPortal({ onReturn, theme, onThemeChange }) {
   const [roster] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem('practice_pal_roster') || '[]'); }
     catch { return []; }
@@ -572,7 +611,7 @@ function StudentPortal({ onReturn }) {
   }
   const total=student?weeklyMinutes(sessions,student.id,mondayOf()):0;
   return <main style={style.page}><div style={{...style.shell,maxWidth:800}}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h1>🎵 Practice Pal · Student Mode</h1><button style={style.secondary} onClick={()=>{if(state!=='idle'&&!window.confirm('Discard unsaved practice time?'))return;onReturn();}}>🔒 Parent Sign In</button></header>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h1>🎵 Practice Pal · Student Mode</h1><div style={{display:'flex',gap:8,flexWrap:'wrap'}}><button type="button" style={style.secondary} onClick={()=>onThemeChange(v=>v==='dark'?'light':'dark')}>{theme==='dark'?'☀️ Light Mode':'🌙 Dark Mode'}</button><button style={style.secondary} onClick={()=>{if(state!=='idle'&&!window.confirm('Discard unsaved practice time?'))return;onReturn();}}>🔒 Parent Sign In</button></div></header>
     {error&&<p role="alert" style={{color:palette.red}}>{error}</p>}
     {message&&<p role="status" style={{color:palette.green}}>{message}</p>}
     {!student?<section style={style.card}><h2>Choose your profile and enter your PIN</h2><form onSubmit={unlock}>
@@ -581,8 +620,8 @@ function StudentPortal({ onReturn }) {
       <button style={style.button} disabled={busy||!studentId||pin.length!==6}>{busy?'Checking...':'Unlock My Practice'}</button>
     </form><p style={{color:palette.gray}}>Ask a parent to set your PIN in Parent Mode first. After 5 incorrect attempts, this profile locks for 15 minutes.</p></section>:
     <><section style={{...style.card,background:'linear-gradient(120deg,#2563eb,#7c3aed)',color:'#fff'}}><h2>Hi, {student.name}! 🎶</h2><p>{student.instrument} · Weekly goal: {student.weekly_goal_minutes} minutes</p><Progress value={total} goal={student.weekly_goal_minutes}/></section>
-    <nav style={{display:'flex',gap:8,marginBottom:16}}>{[['practice','⏱️ Practice'],['log','📖 My Log'],['progress','🏆 Progress']].map(([id,label])=><button key={id} style={{...style.secondary,background:tab===id?palette.navy:'#fff',color:tab===id?'#fff':palette.navy}} onClick={()=>setTab(id)}>{label}</button>)}</nav>
-    {tab==='practice'&&<><section style={style.card}><h2>Practice Timer</h2><div style={{display:'flex',gap:8}}>{[['up','Count Up'],['down','Countdown']].map(([id,label])=><button key={id} style={{...style.secondary,background:mode===id?palette.navy:'#fff',color:mode===id?'#fff':palette.navy}} disabled={state!=='idle'} onClick={()=>setMode(id)}>{label}</button>)}</div>
+    <nav style={{display:'flex',gap:8,marginBottom:16}}>{[['practice','⏱️ Practice'],['log','📖 My Log'],['progress','🏆 Progress']].map(([id,label])=><button key={id} style={{...style.secondary,background:tab===id?palette.blue:surface,color:tab===id?'#fff':palette.navy}} onClick={()=>setTab(id)}>{label}</button>)}</nav>
+    {tab==='practice'&&<><section style={style.card}><h2>Practice Timer</h2><div style={{display:'flex',gap:8}}>{[['up','Count Up'],['down','Countdown']].map(([id,label])=><button key={id} style={{...style.secondary,background:mode===id?palette.blue:surface,color:mode===id?'#fff':palette.navy}} disabled={state!=='idle'} onClick={()=>setMode(id)}>{label}</button>)}</div>
       {mode==='down'&&<FormField label="Countdown minutes" id="studentTarget"><input id="studentTarget" type="number" min="1" max="240" style={style.input} value={target} disabled={state!=='idle'} onChange={e=>{const n=Number(e.target.value);if(Number.isInteger(n)&&n>=1&&n<=240)setTarget(n);}}/></FormField>}
       <div style={{textAlign:'center',fontSize:'clamp(48px,10vw,72px)',fontWeight:800,margin:'30px 0',fontVariantNumeric:'tabular-nums'}}>{formatClock(mode==='down'?Math.max(0,target*60-seconds):seconds)}</div>
       <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center'}}>{state==='idle'&&<button style={style.button} onClick={start}>▶ Start</button>}{state==='running'&&<button style={style.button} onClick={pause}>⏸ Pause</button>}{state==='paused'&&<button style={style.button} onClick={resume}>▶ Resume</button>}{['running','paused'].includes(state)&&<button style={style.secondary} onClick={finish}>■ Finish</button>}{state!=='idle'&&<button style={style.secondary} disabled={busy} onClick={()=>{if(window.confirm('Discard unsaved practice?'))reset();}}>↻ Reset</button>}</div>
