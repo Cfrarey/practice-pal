@@ -70,6 +70,7 @@ export default function App() {
   const [registerMode,setRegisterMode]=useState(false),[registerEmail,setRegisterEmail]=useState(''),[registerPassword,setRegisterPassword]=useState(''),[registerMessage,setRegisterMessage]=useState('');
   const [issuedCode,setIssuedCode]=useState('');
   const [platformAdmin,setPlatformAdmin]=useState(false),[adminView,setAdminView]=useState(false),[adminData,setAdminData]=useState(null),[adminError,setAdminError]=useState(''),[adminBusy,setAdminBusy]=useState(false);
+  const [adminUnlocked,setAdminUnlocked]=useState(false),[adminConfigured,setAdminConfigured]=useState(null),[adminPassword,setAdminPassword]=useState(''),[adminConfirm,setAdminConfirm]=useState('');
   const [newInviteEmail,setNewInviteEmail]=useState(''),[newInviteFamily,setNewInviteFamily]=useState('');
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[authError,setAuthError]=useState('');
   const [familyId,setFamilyId]=useState(null),[familyLoading,setFamilyLoading]=useState(false),[familyError,setFamilyError]=useState('');
@@ -146,7 +147,7 @@ export default function App() {
     return()=>{active=false;subscription.unsubscribe();};
   },[]);
   useEffect(()=>{
-    if(!userId||session?.user?.is_anonymous){setPlatformAdmin(false);return;}
+    if(!userId||session?.user?.is_anonymous){setPlatformAdmin(false);setAdminUnlocked(false);setAdminView(false);return;}
     supabase.rpc('practice_pal_is_platform_admin').then(({data})=>setPlatformAdmin(data===true));
   },[userId]);
   useEffect(()=>{
@@ -441,9 +442,45 @@ export default function App() {
     popup.document.open();popup.document.write(html);popup.document.close();
   }
 
+  async function openAdmin(){
+    setAdminError('');setIssuedCode('');setAdminPassword('');setAdminConfirm('');
+    const {data:configured,error:configError}=await supabase.rpc('practice_pal_admin_password_configured');
+    if(configError){setAdminError(configError.message);return;}
+    setAdminConfigured(configured===true);
+    const {data:unlocked,error:unlockError}=await supabase.rpc('practice_pal_admin_is_unlocked');
+    if(unlockError){setAdminError(unlockError.message);return;}
+    setAdminUnlocked(unlocked===true);
+    setAdminView(true);
+    if(unlocked===true)await refreshAdmin();
+  }
+  async function unlockAdmin(e){
+    e.preventDefault();if(adminBusy)return;
+    setAdminBusy(true);setAdminError('');
+    try{
+      if(adminConfigured===false){
+        if(adminPassword.length<12)throw new Error('Use at least 12 characters.');
+        if(adminPassword!==adminConfirm)throw new Error('Passwords do not match.');
+        const {error}=await supabase.rpc('practice_pal_admin_initialize_password',{p_password:adminPassword});
+        if(error)throw error;
+        setAdminConfigured(true);
+      }
+      const {data,error}=await supabase.rpc('practice_pal_admin_unlock',{p_password:adminPassword});
+      if(error)throw error;
+      if(data!==true)throw new Error('Incorrect password or temporary lockout.');
+      setAdminUnlocked(true);setAdminPassword('');setAdminConfirm('');
+      await refreshAdmin();
+    }catch(err){setAdminError(err.message||String(err));}finally{setAdminBusy(false);}
+  }
+  async function lockAdmin(){
+    setAdminBusy(true);
+    const {error}=await supabase.rpc('practice_pal_admin_lock');
+    setAdminBusy(false);
+    if(error){setAdminError(error.message);return;}
+    setAdminUnlocked(false);setAdminData(null);setIssuedCode('');setAdminPassword('');setAdminView(false);
+  }
   async function refreshAdmin(){
     const {data,error}=await supabase.rpc('practice_pal_admin_codes_overview');
-    if(error)setAdminError(error.message);else {setAdminError('');setAdminData(data);}
+    if(error){setAdminError(error.message);if(/locked|unlock|authorized/i.test(error.message))setAdminUnlocked(false);}else {setAdminError('');setAdminData(data);}
   }
   async function createFamilyCode(e){
     e.preventDefault();if(adminBusy)return;setAdminBusy(true);setAdminError('');setIssuedCode('');
@@ -474,8 +511,17 @@ export default function App() {
     if(data.session){setRegisterMode(false);setActivationSetup(true);}
     else setRegisterMessage('Check your email to verify the account. Then return, sign in, and enter the activation code provided by your administrator.');
   }
+  if(adminView&&platformAdmin&&session&&!session.user.is_anonymous&&!adminUnlocked)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,maxWidth:460,width:'100%'}}>
+    {themeButton}<h1>🛡️ Platform Administrator</h1><p>Enter your independent administrator password. Access expires 15 minutes after unlocking; you can lock it at any time.</p>
+    <form onSubmit={unlockAdmin}>
+      <FormField id="adminPassword" label={adminConfigured===false?'Create administrator password (12+ characters)':'Administrator password'}><input id="adminPassword" type="password" required minLength={adminConfigured===false?12:1} autoComplete="off" style={style.input} value={adminPassword} onChange={e=>setAdminPassword(e.target.value)}/></FormField>
+      {adminConfigured===false&&<FormField id="adminConfirm" label="Confirm administrator password"><input id="adminConfirm" type="password" required minLength={12} autoComplete="off" style={style.input} value={adminConfirm} onChange={e=>setAdminConfirm(e.target.value)}/></FormField>}
+      <button type="submit" disabled={adminBusy||adminConfigured===null} style={style.button}>{adminBusy?'Checking...':adminConfigured===false?'Create and Unlock':'Unlock Platform Admin'}</button>
+    </form>{adminError&&<p role="alert" style={{color:palette.red}}>{adminError}</p>}
+    <button type="button" style={{...style.secondary,marginTop:12}} onClick={()=>{setAdminView(false);setAdminPassword('');setAdminError('');}}>Back to Practice Pal</button>
+  </section></main>;
   if(adminView&&platformAdmin&&session&&!session.user.is_anonymous)return <main style={style.page}><div style={style.shell}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h1>🛡️ Practice Pal Administration</h1><div>{themeButton} <button style={style.secondary} onClick={()=>setAdminView(false)}>Back to Practice Pal</button></div></header>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h1>🛡️ Practice Pal Administration</h1><div>{themeButton} <button style={style.secondary} disabled={adminBusy} onClick={lockAdmin}>🔒 Lock Admin &amp; Return</button></div></header>
     <section style={style.card}><h2>Create manual activation code</h2><p>Codes expire in 14 days and work only with the designated email. Give the code to the family directly; no invitation email is sent.</p>
       <form onSubmit={createFamilyCode}><FormField id="familyName" label="Family name"><input id="familyName" style={style.input} required maxLength={100} value={newInviteFamily} onChange={e=>setNewInviteFamily(e.target.value)}/></FormField>
       <FormField id="familyEmail" label="Family owner's email"><input id="familyEmail" style={style.input} required type="email" value={newInviteEmail} onChange={e=>setNewInviteEmail(e.target.value)}/></FormField>
@@ -534,7 +580,7 @@ export default function App() {
   if(screen!=='parent-dashboard'||!parentUnlocked)return <main style={style.page}>Parent access required.</main>;
 
   return <main style={style.page}><div style={style.shell}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{themeButton}{platformAdmin&&<button type="button" style={style.secondary} onClick={()=>{setAdminView(true);refreshAdmin();}}>🛡️ Platform Admin</button>}<button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{themeButton}{platformAdmin&&<button type="button" style={style.secondary} onClick={openAdmin}>🛡️ Platform Admin</button>}<button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
     <nav aria-label="Main navigation" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:10,marginBottom:16}}>{[['dashboard','🏠 Dashboard'],['students','🎼 Students'],['practice','⏱️ Practice'],['progress','🏆 Progress']].map(([id,label])=><button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)} style={{...style.secondary,whiteSpace:'nowrap',fontWeight:700,background:tab===id?palette.blue:surface,color:tab===id?'#fff':palette.navy}}>{label}</button>)}</nav>
     {familyLoading?<div style={style.card}>Loading family...</div>:familyError?<p role="alert" style={{color:palette.red}}>{familyError}</p>:!familyId?<div style={style.card}>Waiting for family information...</div>:<>
       {notice&&<p role="status" style={{background:'#f0fdf4',color:palette.green,padding:14,borderRadius:10}}>{notice}</p>}
