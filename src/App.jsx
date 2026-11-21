@@ -63,6 +63,9 @@ export default function App() {
   const [tab,setTab]=useState('dashboard'),[busy,setBusy]=useState(false);
   const [screen,setScreen]=useState(() => { try { return sessionStorage.getItem('practice_pal_roster') ? 'splash' : 'family-login'; } catch { return 'family-login'; } });
   const [transitioning,setTransitioning]=useState(false);
+  const [parentUnlocked,setParentUnlocked]=useState(false),[parentConfigured,setParentConfigured]=useState(null);
+  const [parentPassword,setParentPassword]=useState(''),[parentPasswordConfirm,setParentPasswordConfirm]=useState('');
+  const [parentOldPassword,setParentOldPassword]=useState(''),[familyNewPassword,setFamilyNewPassword]=useState('');
   const [studentForm,setStudentForm]=useState({...blankStudent}),[editingId,setEditingId]=useState(null),[formOpen,setFormOpen]=useState(false);
   const [manualOpen,setManualOpen]=useState(false),[entry,setEntry]=useState({...blankEntry,practice_date:localDate()});
   const [selectedStudentId,setSelectedStudentId]=useState(''),[timerMode,setTimerMode]=useState('up'),[targetMinutes,setTargetMinutes]=useState(15);
@@ -92,8 +95,17 @@ export default function App() {
   useEffect(()=>{
     if(!supabase){setAuthError('Supabase environment variables are missing.');setAuthLoading(false);return;}
     let active=true;
-    supabase.auth.getSession().then(({data,error})=>{if(!active)return;if(error)setAuthError(error.message);setSession(data.session);if(data.session&&!data.session.user?.is_anonymous)setScreen('parent-dashboard');setAuthLoading(false);});
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{if(active){setSession(next);setAuthLoading(false);}});
+    supabase.auth.getSession().then(({data,error})=>{
+      if(!active)return;
+      if(error)setAuthError(error.message);
+      setSession(data.session);
+      setScreen(data.session&&!data.session.user?.is_anonymous?'splash':
+        (sessionStorage.getItem('practice_pal_roster')?'splash':'family-login'));
+      setAuthLoading(false);
+    });
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{
+      if(active){setSession(next);setAuthLoading(false);if(!next)setParentUnlocked(false);}
+    });
     return()=>{active=false;subscription.unsubscribe();};
   },[]);
   useEffect(()=>{
@@ -110,7 +122,7 @@ export default function App() {
     return()=>{cancelled=true;};
   },[userId]);
   useEffect(()=>{
-    if(!supabase||!familyId||!userId){setDataLoading(false);return;}
+    if(!supabase||!familyId||!userId||!parentUnlocked){setDataLoading(false);return;}
     let cancelled=false;setDataLoading(true);setStudentError('');setSessionError('');
     (async()=>{
       const [a,b]=await Promise.all([
@@ -123,7 +135,22 @@ export default function App() {
       setDataLoading(false);
     })();
     return()=>{cancelled=true;};
-  },[userId,familyId]);
+  },[userId,familyId,parentUnlocked]);
+  useEffect(()=>{
+    if(!familyId||!session||session.user?.is_anonymous){setParentConfigured(null);setParentUnlocked(false);return;}
+    let active=true;
+    (async()=>{
+      const [config,unlocked]=await Promise.all([
+        supabase.rpc('parent_password_configured',{p_family_id:familyId}),
+        supabase.rpc('parent_is_unlocked',{p_family_id:familyId})
+      ]);
+      if(!active)return;
+      if(config.error){setAuthError(config.error.message);return;}
+      setParentConfigured(Boolean(config.data));
+      setParentUnlocked(Boolean(unlocked.data)&&!unlocked.error);
+    })();
+    return()=>{active=false;};
+  },[familyId,userId]);
   useEffect(()=>{if(selectedStudentId&&!students.some(s=>s.id===selectedStudentId))setSelectedStudentId('');},[students,selectedStudentId]);
   useEffect(()=>{
     if(timerStatus!=='running')return;
@@ -141,36 +168,41 @@ export default function App() {
 
   async function refreshStudents(){const {data,error}=await supabase.from('students').select(studentColumns).eq('family_id',familyId).order('name');if(error){setStudentError(error.message);return false;}setStudents(data??[]);return true;}
   async function refreshSessions(){const {data,error}=await supabase.from('practice_sessions').select(sessionColumns).eq('family_id',familyId).order('practice_date',{ascending:false}).order('created_at',{ascending:false});if(error){setSessionError(error.message);return false;}setSessions(data??[]);return true;}
-  // The first family sign-in identifies a family, captures a minimal roster, and
-  // signs out immediately. The splash screen NEVER retains a parent auth session.
+  // The family login retains a LIMITED authenticated session. The database
+  // grants parent privileges only after the independent parent password unlock.
   async function signIn(e){
     e.preventDefault();if(!supabase||transitioning)return;
     setTransitioning(true);setAuthError('');
     try{
-      const {data:login,error:loginError}=await supabase.auth.signInWithPassword({email,password});
-      if(loginError)throw loginError;
-      if(!login?.user||login.user.is_anonymous)throw new Error('A parent account is required.');
-      const {data:members,error:memberError}=await supabase.from('family_members').select('family_id').eq('user_id',login.user.id);
+      const {data,error}=await supabase.auth.signInWithPassword({email,password});
+      if(error)throw error;
+      if(!data.user||data.user.is_anonymous)throw new Error('Family account required');
+      const {data:members,error:memberError}=await supabase.from('family_members').select('family_id').eq('user_id',data.user.id);
       if(memberError)throw memberError;
-      if(members?.length!==1)throw new Error('Expected exactly one family membership.');
+      if(members?.length!==1)throw new Error('Expected exactly one family membership');
       const {data:roster,error:rosterError}=await supabase.from('students').select('id,name,instrument').eq('family_id',members[0].family_id).order('name');
       if(rosterError)throw rosterError;
       sessionStorage.setItem('practice_pal_roster',JSON.stringify(roster??[]));
-      const {error:logoutError}=await supabase.auth.signOut();
-      if(logoutError)throw logoutError;
-      setPassword('');setScreen('splash');
-    }catch(error){setAuthError(error.message||String(error));
-      // Do not leave a privileged parent session active after failed family setup.
-      await supabase.auth.signOut();
-    }finally{setTransitioning(false);}
+      setPassword('');setParentUnlocked(false);setScreen('splash');
+    }catch(error){setAuthError(error.message||String(error));await supabase.auth.signOut();}
+    finally{setTransitioning(false);}
   }
   async function unlockParent(e){
-    e.preventDefault();if(!supabase||transitioning)return;
+    e.preventDefault();if(!supabase||transitioning||!familyId)return;
     setTransitioning(true);setAuthError('');
-    const {data,error}=await supabase.auth.signInWithPassword({email,password});
-    if(error){setAuthError(error.message);setTransitioning(false);return;}
-    if(data?.user?.is_anonymous){await supabase.auth.signOut();setAuthError('Parent credentials required.');setTransitioning(false);return;}
-    setPassword('');setScreen('parent-dashboard');setTransitioning(false);
+    try{
+      if(parentConfigured===false){
+        if(parentPassword!==parentPasswordConfirm)throw new Error('Parent passwords do not match');
+        const {error}=await supabase.rpc('parent_initialize_password',{p_family_id:familyId,p_password:parentPassword});
+        if(error)throw error;
+        setParentConfigured(true);
+      }
+      const {data,error}=await supabase.rpc('parent_unlock',{p_family_id:familyId,p_password:parentPassword});
+      if(error)throw error;
+      if(!data)throw new Error('Incorrect parent password or temporary lockout. Try again later.');
+      setParentUnlocked(true);setParentPassword('');setParentPasswordConfirm('');setScreen('parent-dashboard');
+    }catch(error){setAuthError(error.message||String(error));}
+    finally{setTransitioning(false);}
   }
   async function signOut(){
     if(!supabase||savingRef.current||transitioning)return;
@@ -178,7 +210,7 @@ export default function App() {
     setTransitioning(true);setAuthError('');
     const {error}=await supabase.auth.signOut();
     if(error)setAuthError(error.message);
-    else{setPassword('');setScreen(sessionStorage.getItem('practice_pal_roster')?'splash':'family-login');}
+    else{setParentUnlocked(false);setPassword('');setScreen('family-login');sessionStorage.removeItem('practice_pal_roster');}
     setTransitioning(false);
   }
   async function chooseMode(){
@@ -186,9 +218,31 @@ export default function App() {
     if(hasUnsaved()&&!window.confirm('Discard unsaved practice time and return to the welcome screen?'))return;
     setTransitioning(true);setAuthError('');
     if(students.length)sessionStorage.setItem('practice_pal_roster',JSON.stringify(students.map(s=>({id:s.id,name:s.name,instrument:s.instrument}))));
-    const {error}=await supabase.auth.signOut();
-    if(error)setAuthError(error.message);else{setPassword('');setScreen('splash');}
-    setTransitioning(false);
+    if(familyId){const {error}=await supabase.rpc('parent_lock',{p_family_id:familyId});if(error){setAuthError(error.message);setTransitioning(false);return;}}
+    setParentUnlocked(false);setParentPassword('');setScreen('splash');setTransitioning(false);
+  }
+  async function changeParentPassword(e){
+    e.preventDefault();setAuthError('');
+    if(parentPassword!==parentPasswordConfirm){setAuthError('New parent passwords do not match');return;}
+    setBusy(true);
+    const {error}=await supabase.rpc('parent_change_password',{p_family_id:familyId,p_old:parentOldPassword,p_new:parentPassword});
+    if(error)setAuthError(error.message);
+    else{setParentUnlocked(false);setParentPassword('');setParentPasswordConfirm('');setParentOldPassword('');setScreen('splash');}
+    setBusy(false);
+  }
+  async function changeFamilyPassword(e){
+    e.preventDefault();setAuthError('');
+    if(!parentUnlocked||!familyId)return;
+    setBusy(true);
+    const {data:ok,error:checkError}=await supabase.rpc('parent_is_unlocked',{p_family_id:familyId});
+    if(checkError||!ok){setAuthError('Parent unlock expired. Return to the welcome screen and unlock again.');setParentUnlocked(false);setBusy(false);return;}
+    const {data:allowed,error:allowedError}=await supabase.rpc('parent_new_family_password_allowed',{p_family_id:familyId,p_candidate:familyNewPassword});
+    if(allowedError||!allowed){setAuthError(allowedError?.message||'Family password must be at least 12 characters and differ from the parent password.');setBusy(false);return;}
+    // Supabase Auth's standard password-change API does not itself enforce
+    // Parent Mode. This is an app-level restriction; see deployment notes.
+    const {error}=await supabase.auth.updateUser({password:familyNewPassword});
+    if(error)setAuthError(error.message);else{setFamilyNewPassword('');setNotice('Family password changed.');}
+    setBusy(false);
   }
   function finishTimer(){if(!['running','paused'].includes(statusRef.current))return;if(statusRef.current==='running'){elapsedMs.current+=Math.max(0,Date.now()-startedAt.current);startedAt.current=null;}if(timerMode==='down')elapsedMs.current=Math.min(elapsedMs.current,targetMinutes*60000);secondsRef.current=Math.floor(elapsedMs.current/1000);setElapsedSeconds(secondsRef.current);setStatus('finished');}
   function resetTimer(){if(savingRef.current)return;if(hasUnsaved()&&!window.confirm('Discard unsaved practice time?'))return;resetClock();setCategory('Other');setFocus('');setNotes('');setSessionError('');}
@@ -256,13 +310,13 @@ export default function App() {
   function openManual(studentId='') {setEntry({...blankEntry,student_id:studentId||selectedStudentId||'',practice_date:localDate()});setManualOpen(true);setSessionError('');setTab('practice');}
 
   useEffect(()=>{
-    if(!familyId||session?.user?.is_anonymous)return;
+    if(!familyId||!parentUnlocked||session?.user?.is_anonymous)return;
     let active=true;
     supabase.rpc('parent_student_pin_status').then(({data,error})=>{
       if(active&&!error)setPinStatus(Object.fromEntries((data||[]).map(x=>[x.student_id,x.has_pin])));
     });
     return()=>{active=false;};
-  },[familyId,students,session?.user?.is_anonymous]);
+  },[familyId,students,session?.user?.is_anonymous,parentUnlocked]);
   async function setStudentPin(student){
     const pin=pinValues[student.id]||'';
     if(!/^[0-9]{6}$/.test(pin)){setStudentError('Enter exactly six digits for the student PIN.');return;}
@@ -275,9 +329,10 @@ export default function App() {
   async function enterStudentMode(){
     if(!supabase||transitioning)return;
     setTransitioning(true);setAuthError('');
-    // Splash is accessible only after the parent session has been signed out.
-    const {data:current}=await supabase.auth.getSession();
-    if(current.session){setAuthError('Please sign out of Parent Mode before entering Student Mode.');setTransitioning(false);return;}
+    // End the family session before creating an anonymous student identity.
+    const {error:logoutError}=await supabase.auth.signOut();
+    if(logoutError){setAuthError(logoutError.message);setTransitioning(false);return;}
+    setParentUnlocked(false);
     const {error}=await supabase.auth.signInAnonymously();
     if(error)setAuthError('Enable Anonymous Sign-ins in Supabase Authentication: '+error.message);
     setTransitioning(false);
@@ -315,31 +370,34 @@ export default function App() {
 
   if(authLoading||transitioning)return <main style={style.page}>Preparing Practice Pal securely...</main>;
   if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent}/>;
-  // An existing authenticated parent session may only open Parent Mode, never the splash.
-  if(session&&screen!=='parent-dashboard')return <main style={style.page}><p>Securing your session...</p><button style={style.secondary} onClick={chooseMode}>Return to Welcome Screen (sign out)</button></main>;
-  if(!session&&screen==='parent-dashboard')return <main style={style.page}><p>Parent session ended.</p><button style={style.button} onClick={()=>setScreen('parent-login')}>Parent Sign In</button></main>;
-  if(!session&&screen==='splash')return <main style={{...style.page,display:'grid',placeItems:'center'}}>
-    <section style={{...style.card,width:'100%',maxWidth:720,boxSizing:'border-box',textAlign:'center'}}>
-      <div style={{fontSize:48}} aria-hidden="true">🎵</div><h1>Welcome to Practice Pal!</h1>
-      <p style={{color:palette.gray}}>Who's using Practice Pal today?</p>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:16,margin:'24px 0'}}>
-        <section style={{...style.card,border:`1px solid ${palette.border}`}}><div style={{fontSize:42}}>🎹</div><h2>I'm a Student</h2><p>Choose your profile and enter your PIN.</p><button type="button" style={{...style.button,width:'100%'}} onClick={enterStudentMode}>Student Practice</button></section>
-        <section style={{...style.card,border:`1px solid ${palette.border}`}}><div style={{fontSize:42}}>🛡️</div><h2>I'm a Parent</h2><p>Parent password required for dashboard access.</p><button type="button" style={{...style.button,width:'100%'}} onClick={()=>{setAuthError('');setScreen('parent-login');}}>Unlock Parent Dashboard</button></section>
-      </div>
-      {authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
-      <button type="button" style={style.secondary} onClick={()=>{sessionStorage.removeItem('practice_pal_roster');setScreen('family-login');}}>Use a different family account</button>
-    </section>
-  </main>;
-  if(!session)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,width:'100%',maxWidth:420,boxSizing:'border-box'}}>
-    <div style={{textAlign:'center'}}><div style={{fontSize:48}}>🎵</div><h1>Practice Pal</h1><p>{screen==='parent-login'?'Parent verification required':'Small practices. Big progress.'}</p></div>
-    <form onSubmit={screen==='parent-login'?unlockParent:signIn}><h2>{screen==='parent-login'?'🔒 Parent Sign In':'Family Sign In'}</h2>
-      <FormField label="Email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField>
-      <FormField label="Password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField>
-      <button type="submit" style={{...style.button,width:'100%'}}>{screen==='parent-login'?'Unlock Parent Dashboard':'Continue to Welcome Screen'}</button>
-    </form>
-    {authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
-    {screen==='parent-login'&&<button type="button" style={{...style.secondary,marginTop:12,width:'100%'}} onClick={()=>{setAuthError('');setPassword('');setScreen('splash');}}>Back to Welcome Screen</button>}
+  if(session&&screen==='parent-dashboard'&&!parentUnlocked)return <main style={style.page}><section style={style.card}><p>Parent Mode is locked or has expired.</p><button type="button" style={style.button} onClick={()=>setScreen('parent-login')}>Unlock Parent Mode</button></section></main>;
+  if(session&&screen==='splash')return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,width:'100%',maxWidth:720,textAlign:'center'}}>
+    <h1>🎵 Welcome to Practice Pal!</h1><p>Who's using Practice Pal today?</p>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:16}}>
+      <section style={style.card}><h2>🎹 Student</h2><p>Choose your profile and enter your PIN.</p><button style={style.button} onClick={enterStudentMode}>Student Practice</button></section>
+      <section style={style.card}><h2>🛡️ Parent</h2><p>Enter the separate parent password.</p><button style={style.button} onClick={()=>{setAuthError('');setScreen('parent-login');}}>Unlock Parent Dashboard</button></section>
+    </div>{authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
+    <button style={style.secondary} onClick={signOut}>Sign Out of Family</button>
   </section></main>;
+  if(session&&screen==='parent-login')return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,maxWidth:440,width:'100%'}}>
+    <h1>🔒 {parentConfigured===false?'Create Parent Password':'Unlock Parent Dashboard'}</h1>
+    {familyLoading||parentConfigured===null?<p>Checking parent security...</p>:<form onSubmit={unlockParent}>
+      <FormField label={parentConfigured===false?'New parent password (12+ characters)':'Parent password'} id="parentSecret"><input id="parentSecret" type="password" required minLength={parentConfigured===false?12:1} autoComplete="off" style={style.input} value={parentPassword} onChange={e=>setParentPassword(e.target.value)}/></FormField>
+      {parentConfigured===false&&<FormField label="Confirm new parent password" id="parentConfirm"><input id="parentConfirm" type="password" required minLength={12} autoComplete="off" style={style.input} value={parentPasswordConfirm} onChange={e=>setParentPasswordConfirm(e.target.value)}/></FormField>}
+      <button type="submit" style={style.button}>{parentConfigured===false?'Set Up and Unlock':'Unlock Parent Dashboard'}</button>
+    </form>}
+    {authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
+    <button style={{...style.secondary,marginTop:12}} onClick={()=>{setParentPassword('');setScreen('splash');}}>Back to Welcome</button>
+  </section></main>;
+  if(!session)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,maxWidth:420,width:'100%'}}>
+    <h1>🎵 Practice Pal</h1><h2>Family Sign In</h2>
+    <form onSubmit={signIn}>
+      <FormField label="Family email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField>
+      <FormField label="Family password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField>
+      <button type="submit" style={style.button}>Continue to Welcome Screen</button>
+    </form>{authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
+  </section></main>;
+  if(screen!=='parent-dashboard'||!parentUnlocked)return <main style={style.page}>Parent access required.</main>;
 
   return <main style={style.page}><div style={style.shell}>
     <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" style={style.button} onClick={chooseMode}>🏠 Choose Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
@@ -348,6 +406,20 @@ export default function App() {
       {notice&&<p role="status" style={{background:'#f0fdf4',color:palette.green,padding:14,borderRadius:10}}>{notice}</p>}
       {studentError&&<p role="alert" style={{background:'#fef2f2',color:palette.red,padding:14,borderRadius:10}}>Student: {studentError}</p>}
       {sessionError&&<p role="alert" style={{background:'#fef2f2',color:palette.red,padding:14,borderRadius:10}}>Practice log: {sessionError}</p>}
+      {tab==='dashboard'&&<section style={style.card}><h2>🔐 Family Security</h2><p>Parent Mode is unlocked for up to 30 minutes. Choose Mode locks it immediately.</p>
+        <details><summary style={{cursor:'pointer',fontWeight:700}}>Change parent password</summary><form onSubmit={changeParentPassword} style={{marginTop:16}}>
+          <FormField label="Current parent password" id="oldParent"><input id="oldParent" type="password" required style={style.input} value={parentOldPassword} onChange={e=>setParentOldPassword(e.target.value)}/></FormField>
+          <FormField label="New parent password (12+ characters)" id="newParent"><input id="newParent" type="password" minLength={12} required style={style.input} value={parentPassword} onChange={e=>setParentPassword(e.target.value)}/></FormField>
+          <FormField label="Confirm new parent password" id="confirmParent"><input id="confirmParent" type="password" minLength={12} required style={style.input} value={parentPasswordConfirm} onChange={e=>setParentPasswordConfirm(e.target.value)}/></FormField>
+          <button type="submit" disabled={busy} style={style.button}>Change Parent Password</button>
+        </form></details>
+        <details style={{marginTop:16}}><summary style={{cursor:'pointer',fontWeight:700}}>Change family password</summary><form onSubmit={changeFamilyPassword} style={{marginTop:16}}>
+          <FormField label="New family password" id="newFamily"><input id="newFamily" type="password" required minLength={12} style={style.input} value={familyNewPassword} onChange={e=>setFamilyNewPassword(e.target.value)}/></FormField>
+          <button type="submit" disabled={busy} style={style.button}>Change Family Password</button>
+          <p style={{fontSize:12,color:palette.gray}}>This control is restricted in the app, but Supabase Auth's standard API and email recovery can change the family password outside Parent Mode.</p>
+        </form></details>
+        {authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}
+      </section>}
       {tab==='dashboard'&&<>
         <section style={{background:'linear-gradient(120deg,#2563eb,#7c3aed)',color:'#fff',padding:28,borderRadius:20,marginBottom:20}}><h2>Ready to make some music? 🎶</h2><p>Every practice brings you closer to your goals.</p><button type="button" style={style.secondary} onClick={()=>setTab('practice')}>⏱️ Start Practicing</button></section>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14}}>{[['👨‍👩‍👧‍👦','Students',students.length],['🎯','Weekly Goal',`${totalGoal} min`],['🎵','Practiced This Week',`${weeklyTotal} min`]].map(([icon,label,value])=><div key={label} style={style.card}><div style={{fontSize:26}}>{icon}</div><p style={{color:palette.gray}}>{label}</p><strong style={{fontSize:27}}>{value}</strong></div>)}</div>
