@@ -66,6 +66,7 @@ export default function App() {
   const [selectedStudentId,setSelectedStudentId]=useState(''),[timerMode,setTimerMode]=useState('up'),[targetMinutes,setTargetMinutes]=useState(15);
   const [timerStatus,setTimerStatus]=useState('idle'),[elapsedSeconds,setElapsedSeconds]=useState(0);
   const [category,setCategory]=useState('Other'),[focus,setFocus]=useState(''),[notes,setNotes]=useState('');
+  const [pinStatus,setPinStatus]=useState({}),[pinValues,setPinValues]=useState({}),[pinBusy,setPinBusy]=useState(false);
   const [reportStudent,setReportStudent]=useState('all'),[reportMonday,setReportMonday]=useState(localDate(mondayOf()));
   const elapsedMs=useRef(0),startedAt=useRef(null),statusRef=useRef('idle'),secondsRef=useRef(0),savingRef=useRef(false),timerOwner=useRef(null);
   const userId=session?.user?.id??null;
@@ -95,7 +96,7 @@ export default function App() {
   },[]);
   useEffect(()=>{
     setFamilyId(null);setFamilyError('');setStudents([]);setSessions([]);setSelectedStudentId('');setStudentError('');setSessionError('');setNotice('');setTab('dashboard');setFormOpen(false);setManualOpen(false);resetClock();
-    if(!supabase||!userId){setFamilyLoading(false);return;}
+    if(!supabase||!userId||session?.user?.is_anonymous){setFamilyLoading(false);return;}
     let cancelled=false;setFamilyLoading(true);
     (async()=>{const {data,error}=await supabase.from('family_members').select('family_id').eq('user_id',userId);
       if(cancelled)return;
@@ -208,6 +209,39 @@ export default function App() {
     setBusy(false);
   }
   function openManual(studentId='') {setEntry({...blankEntry,student_id:studentId||selectedStudentId||'',practice_date:localDate()});setManualOpen(true);setSessionError('');setTab('practice');}
+
+  useEffect(()=>{
+    if(!familyId||session?.user?.is_anonymous)return;
+    let active=true;
+    supabase.rpc('parent_student_pin_status').then(({data,error})=>{
+      if(active&&!error)setPinStatus(Object.fromEntries((data||[]).map(x=>[x.student_id,x.has_pin])));
+    });
+    return()=>{active=false;};
+  },[familyId,students,session?.user?.is_anonymous]);
+  async function setStudentPin(student){
+    const pin=pinValues[student.id]||'';
+    if(!/^[0-9]{6}$/.test(pin)){setStudentError('Enter exactly six digits for the student PIN.');return;}
+    setPinBusy(true);setStudentError('');
+    const {error}=await supabase.rpc('parent_set_student_pin',{p_student_id:student.id,p_pin:pin});
+    if(error)setStudentError(error.message);
+    else {setPinValues(p=>({...p,[student.id]:''}));setPinStatus(p=>({...p,[student.id]:true}));setNotice(`PIN updated for ${student.name}.`);}
+    setPinBusy(false);
+  }
+  async function enterStudentMode(){
+    if(hasUnsaved()&&!window.confirm('Discard unsaved timer and enter Student Mode?'))return;
+    sessionStorage.setItem('practice_pal_roster',JSON.stringify(students.map(s=>({id:s.id,name:s.name,instrument:s.instrument}))));
+    setAuthError('');
+    const {error:logoutError}=await supabase.auth.signOut();
+    if(logoutError){setAuthError(logoutError.message);return;}
+    const {error:anonError}=await supabase.auth.signInAnonymously();
+    if(anonError)setAuthError('Student Mode needs Anonymous Sign-ins enabled in Supabase Auth: '+anonError.message);
+  }
+  async function returnToParent(){
+    sessionStorage.removeItem('practice_pal_roster');
+    const {error}=await supabase.auth.signOut();
+    if(error)setAuthError(error.message);
+  }
+
   function exportPdf(){
     // Browser-native PDF output: print dialog -> Save as PDF. No dependency or server required.
     if(dataLoading||studentError||sessionError){setNotice('Resolve data loading errors before exporting a report.');return;}
@@ -231,10 +265,11 @@ export default function App() {
   }
 
   if(authLoading)return <main style={style.page}>Loading Practice Pal...</main>;
+  if(session?.user?.is_anonymous)return <StudentPortal onReturn={returnToParent}/>;
   if(!session)return <main style={{...style.page,display:'grid',placeItems:'center'}}><section style={{...style.card,width:'100%',maxWidth:420,boxSizing:'border-box'}}><div style={{textAlign:'center'}}><div style={{fontSize:48}}>🎵</div><h1>Practice Pal</h1><p>Small practices. Big progress.</p></div><form onSubmit={signIn}><h2>Family Sign In</h2><FormField label="Email" id="email"><input id="email" type="email" autoComplete="email" required style={style.input} value={email} onChange={e=>setEmail(e.target.value)}/></FormField><FormField label="Password" id="password"><input id="password" type="password" autoComplete="current-password" required style={style.input} value={password} onChange={e=>setPassword(e.target.value)}/></FormField><button type="submit" style={{...style.button,width:'100%'}}>Sign In</button></form>{authError&&<p role="alert" style={{color:palette.red}}>{authError}</p>}</section></main>;
 
   return <main style={style.page}><div style={style.shell}>
-    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></header>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:22}}><div><h1 style={{margin:'0 0 5px'}}>🎵 Practice Pal</h1><small style={{color:palette.gray}}>{session.user.email}</small></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" style={style.button} onClick={enterStudentMode}>🎵 Enter Student Mode</button><button type="button" style={style.secondary} onClick={signOut}>Sign Out</button></div></header>
     <nav aria-label="Main navigation" style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:10,marginBottom:16}}>{[['dashboard','🏠 Dashboard'],['students','🎼 Students'],['practice','⏱️ Practice'],['progress','🏆 Progress']].map(([id,label])=><button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)} style={{...style.secondary,whiteSpace:'nowrap',fontWeight:700,background:tab===id?palette.navy:'#fff',color:tab===id?'#fff':palette.navy}}>{label}</button>)}</nav>
     {familyLoading?<div style={style.card}>Loading family...</div>:familyError?<p role="alert" style={{color:palette.red}}>{familyError}</p>:!familyId?<div style={style.card}>Waiting for family information...</div>:<>
       {notice&&<p role="status" style={{background:'#f0fdf4',color:palette.green,padding:14,borderRadius:10}}>{notice}</p>}
@@ -252,7 +287,7 @@ export default function App() {
       </>}
       {tab==='students'&&<section style={style.card}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12}}><h2>🎼 Student Profiles</h2>{!formOpen&&<button type="button" style={style.button} onClick={addStudent}>+ Add Student</button>}</div>
         {formOpen&&<form onSubmit={saveStudent} style={{background:palette.bg,padding:18,borderRadius:14,marginBottom:20}}><h3>{editingId?'Edit Student':'Add Student'}</h3><FormField label="Student Name" id="studentName"><input id="studentName" required maxLength={100} style={style.input} value={studentForm.name} onChange={e=>setStudentForm(p=>({...p,name:e.target.value}))}/></FormField><FormField label="Instrument" id="instrument"><select id="instrument" required style={style.input} value={studentForm.instrument} onChange={e=>setStudentForm(p=>({...p,instrument:e.target.value}))}><option value="">Select instrument</option>{instruments.map(i=><option key={i} value={i}>{i}</option>)}</select></FormField><FormField label="Weekly Goal (minutes)" id="goal"><input id="goal" type="number" min="0" max="10080" step="1" required style={style.input} value={studentForm.weekly_goal_minutes} onChange={e=>setStudentForm(p=>({...p,weekly_goal_minutes:e.target.value}))}/></FormField><div style={{display:'flex',gap:10,flexWrap:'wrap'}}><button type="submit" disabled={busy} style={style.button}>{busy?'Saving...':'Save Student'}</button><button type="button" disabled={busy} style={style.secondary} onClick={cancelForm}>Cancel</button></div></form>}
-        {dataLoading&&<p>Loading students...</p>}{students.map(s=><div key={s.id} style={{borderTop:`1px solid ${palette.border}`,padding:'18px 0'}}><h3>🎵 {s.name}</h3><p>{s.instrument} · {s.weekly_goal_minutes} min/week</p><div style={{display:'flex',gap:10,flexWrap:'wrap'}}><button type="button" style={style.secondary} disabled={busy} onClick={()=>editStudent(s)}>Edit Profile</button><button type="button" style={{...style.secondary,color:palette.red}} disabled={busy} onClick={()=>deleteStudent(s)}>Delete</button></div></div>)}
+        {dataLoading&&<p>Loading students...</p>}{students.map(s=><div key={s.id} style={{borderTop:`1px solid ${palette.border}`,padding:'18px 0'}}><h3>🎵 {s.name}</h3><p>{s.instrument} · {s.weekly_goal_minutes} min/week</p><div style={{background:palette.bg,padding:12,borderRadius:10,marginBottom:12}}><strong>🔒 Student PIN: {pinStatus[s.id]?"Configured":"Not configured"}</strong><p style={{fontSize:12,color:palette.gray}}>Set or reset a six-digit PIN. Only the parent can change it.</p><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input aria-label={`New PIN for ${s.name}`} type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" placeholder="6-digit PIN" style={{...style.input,width:160,margin:0}} value={pinValues[s.id]||""} onChange={e=>setPinValues(p=>({...p,[s.id]:e.target.value.replace(/\D/g,"").slice(0,6)}))}/><button type="button" style={style.secondary} disabled={pinBusy||(pinValues[s.id]||"").length!==6} onClick={()=>setStudentPin(s)}>Save PIN</button></div></div><div style={{display:'flex',gap:10,flexWrap:'wrap'}}><button type="button" style={style.secondary} disabled={busy} onClick={()=>editStudent(s)}>Edit Profile</button><button type="button" style={{...style.secondary,color:palette.red}} disabled={busy} onClick={()=>deleteStudent(s)}>Delete</button></div></div>)}
       </section>}
       {tab==='practice'&&<>
         <section style={{...style.card,maxWidth:650,margin:'0 auto 20px'}}><h2>⏱️ Practice Timer</h2><FormField label="Select Musician" id="practiceStudent"><select id="practiceStudent" style={style.input} value={selectedStudentId} disabled={timerStatus!=='idle'} onChange={e=>setSelectedStudentId(e.target.value)}><option value="">Choose a student</option>{students.map(s=><option key={s.id} value={s.id}>{s.name} — {s.instrument}</option>)}</select></FormField>
@@ -270,5 +305,126 @@ export default function App() {
       {tab==='progress'&&<section style={style.card}><h2>🏆 Weekly Progress</h2><p style={{color:palette.gray}}>Current week: {formatDate(thisMonday)} – {formatDate(sundayOf(thisMonday))}</p>{students.map(s=><div key={s.id} style={{padding:'18px 0',borderBottom:`1px solid ${palette.border}`}}><h3>{s.name}</h3><Progress value={weeklyMinutes(sessions,s.id,thisMonday)} goal={Number(s.weekly_goal_minutes)||0}/><button type="button" style={{...style.secondary,marginTop:12}} onClick={()=>openManual(s.id)}>+ Add Practice</button></div>)}{students.length===0&&<p>Add students to track progress.</p>}</section>}
     </>}
     <footer style={{textAlign:'center',marginTop:35,paddingBottom:20,color:palette.gray,fontSize:12}}>Practice Pal · Make every practice count.</footer>
+  </div></main>;
+}
+
+function StudentPortal({ onReturn }) {
+  const [roster] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('practice_pal_roster') || '[]'); }
+    catch { return []; }
+  });
+  const [studentId,setStudentId] = useState('');
+  const [pin,setPin] = useState('');
+  const [student,setStudent] = useState(null);
+  const [sessions,setSessions] = useState([]);
+  const [error,setError] = useState('');
+  const [message,setMessage] = useState('');
+  const [busy,setBusy] = useState(false);
+  const [tab,setTab] = useState('practice');
+  const [manualOpen,setManualOpen] = useState(false);
+  const [entry,setEntry] = useState({...blankEntry,practice_date:localDate()});
+  const [mode,setMode] = useState('up');
+  const [target,setTarget] = useState(15);
+  const [state,setState] = useState('idle');
+  const [seconds,setSeconds] = useState(0);
+  const [category,setCategory] = useState('Other');
+  const [focus,setFocus] = useState('');
+  const [notes,setNotes] = useState('');
+  const accumulated = useRef(0);
+  const started = useRef(null);
+  const elapsed = useRef(0);
+  const saving = useRef(false);
+
+  async function loadStudent() {
+    const {data,error:err} = await supabase.rpc('student_my_data');
+    if (err) { setStudent(null); setError(err.message); return false; }
+    setStudent(data.student);
+    setSessions(data.sessions || []);
+    setError('');
+    return true;
+  }
+  useEffect(() => { loadStudent(); }, []);
+  useEffect(() => {
+    if(state !== 'running') return;
+    const tick=()=>{
+      if(started.current===null)return;
+      const ms=accumulated.current+Date.now()-started.current;
+      if(mode==='down'&&ms>=target*60000){
+        accumulated.current=target*60000;started.current=null;
+        elapsed.current=target*60;setSeconds(target*60);setState('finished');return;
+      }
+      elapsed.current=Math.floor(ms/1000);setSeconds(elapsed.current);
+    };
+    tick();const interval=setInterval(tick,250);return()=>clearInterval(interval);
+  },[state,mode,target]);
+  useEffect(()=>{
+    const handler=e=>{if(state!=='idle'){e.preventDefault();e.returnValue='';}};
+    window.addEventListener('beforeunload',handler);
+    return()=>window.removeEventListener('beforeunload',handler);
+  },[state]);
+  function reset(){accumulated.current=0;started.current=null;elapsed.current=0;setSeconds(0);setState('idle');}
+  function start(){setError('');setMessage('');reset();started.current=Date.now();setState('running');}
+  function pause(){if(state!=='running')return;accumulated.current+=Date.now()-started.current;started.current=null;elapsed.current=Math.floor(accumulated.current/1000);setSeconds(elapsed.current);setState('paused');}
+  function resume(){started.current=Date.now();setState('running');}
+  function finish(){if(state==='running'){accumulated.current+=Date.now()-started.current;started.current=null;}
+    if(mode==='down')accumulated.current=Math.min(accumulated.current,target*60000);
+    elapsed.current=Math.floor(accumulated.current/1000);setSeconds(elapsed.current);setState('finished');}
+  async function unlock(e){
+    e.preventDefault();if(busy||!studentId||!/^[0-9]{6}$/.test(pin))return;
+    setBusy(true);setError('');
+    const {data,error:err}=await supabase.rpc('student_unlock',{p_student_id:studentId,p_pin:pin});
+    setPin('');
+    if(err)setError(err.message);
+    else if(!data)setError('Incorrect PIN or temporarily locked. Try again later or ask a parent.');
+    else await loadStudent();
+    setBusy(false);
+  }
+  async function save(payload){
+    if(saving.current)return;
+    saving.current=true;setBusy(true);setError('');setMessage('');
+    try {
+      const {data,error:err}=await supabase.rpc('student_add_practice',{
+        p_practice_date:payload.practice_date,p_minutes:payload.minutes,
+        p_category:payload.category,p_focus:payload.focus||null,p_notes:payload.notes||null
+      });
+      if(err){setError(err.message);return;}
+      if(!data){setError('Save not confirmed; check the log before trying again.');return;}
+      reset();setManualOpen(false);setEntry({...blankEntry,practice_date:localDate()});
+      setCategory('Other');setFocus('');setNotes('');
+      setMessage(`${payload.minutes} minute(s) saved!`);
+      await loadStudent();
+    } finally {saving.current=false;setBusy(false);}
+  }
+  async function saveTimer(){
+    if(state!=='finished'||seconds<1)return setError('Practice for at least one second.');
+    await save({practice_date:localDate(),minutes:Math.ceil(seconds/60),category,focus:focus.trim(),notes:notes.trim()});
+  }
+  async function saveManual(e){
+    e.preventDefault();const n=Number(entry.minutes);
+    if(!Number.isSafeInteger(n)||n<1||n>1440)return setError('Minutes must be between 1 and 1440.');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(entry.practice_date)||localDate(parseLocalDate(entry.practice_date))!==entry.practice_date||entry.practice_date>localDate())return setError('Invalid practice date.');
+    await save({...entry,minutes:n});
+  }
+  const total=student?weeklyMinutes(sessions,student.id,mondayOf()):0;
+  return <main style={style.page}><div style={{...style.shell,maxWidth:800}}>
+    <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><h1>🎵 Practice Pal · Student Mode</h1><button style={style.secondary} onClick={()=>{if(state!=='idle'&&!window.confirm('Discard unsaved practice time?'))return;onReturn();}}>🔒 Parent Sign In</button></header>
+    {error&&<p role="alert" style={{color:palette.red}}>{error}</p>}
+    {message&&<p role="status" style={{color:palette.green}}>{message}</p>}
+    {!student?<section style={style.card}><h2>Choose your profile and enter your PIN</h2><form onSubmit={unlock}>
+      <FormField label="Musician" id="studentChoice"><select id="studentChoice" required style={style.input} value={studentId} onChange={e=>setStudentId(e.target.value)}><option value="">Select a student</option>{roster.map(s=><option key={s.id} value={s.id}>{s.name} · {s.instrument}</option>)}</select></FormField>
+      <FormField label="6-digit PIN" id="studentPin"><input id="studentPin" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" required style={style.input} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').slice(0,6))}/></FormField>
+      <button style={style.button} disabled={busy||!studentId||pin.length!==6}>{busy?'Checking...':'Unlock My Practice'}</button>
+    </form><p style={{color:palette.gray}}>Ask a parent to set your PIN in Parent Mode first. After 5 incorrect attempts, this profile locks for 15 minutes.</p></section>:
+    <><section style={{...style.card,background:'linear-gradient(120deg,#2563eb,#7c3aed)',color:'#fff'}}><h2>Hi, {student.name}! 🎶</h2><p>{student.instrument} · Weekly goal: {student.weekly_goal_minutes} minutes</p><Progress value={total} goal={student.weekly_goal_minutes}/></section>
+    <nav style={{display:'flex',gap:8,marginBottom:16}}>{[['practice','⏱️ Practice'],['log','📖 My Log'],['progress','🏆 Progress']].map(([id,label])=><button key={id} style={{...style.secondary,background:tab===id?palette.navy:'#fff',color:tab===id?'#fff':palette.navy}} onClick={()=>setTab(id)}>{label}</button>)}</nav>
+    {tab==='practice'&&<><section style={style.card}><h2>Practice Timer</h2><div style={{display:'flex',gap:8}}>{[['up','Count Up'],['down','Countdown']].map(([id,label])=><button key={id} style={{...style.secondary,background:mode===id?palette.navy:'#fff',color:mode===id?'#fff':palette.navy}} disabled={state!=='idle'} onClick={()=>setMode(id)}>{label}</button>)}</div>
+      {mode==='down'&&<FormField label="Countdown minutes" id="studentTarget"><input id="studentTarget" type="number" min="1" max="240" style={style.input} value={target} disabled={state!=='idle'} onChange={e=>{const n=Number(e.target.value);if(Number.isInteger(n)&&n>=1&&n<=240)setTarget(n);}}/></FormField>}
+      <div style={{textAlign:'center',fontSize:'clamp(48px,10vw,72px)',fontWeight:800,margin:'30px 0',fontVariantNumeric:'tabular-nums'}}>{formatClock(mode==='down'?Math.max(0,target*60-seconds):seconds)}</div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center'}}>{state==='idle'&&<button style={style.button} onClick={start}>▶ Start</button>}{state==='running'&&<button style={style.button} onClick={pause}>⏸ Pause</button>}{state==='paused'&&<button style={style.button} onClick={resume}>▶ Resume</button>}{['running','paused'].includes(state)&&<button style={style.secondary} onClick={finish}>■ Finish</button>}{state!=='idle'&&<button style={style.secondary} disabled={busy} onClick={()=>{if(window.confirm('Discard unsaved practice?'))reset();}}>↻ Reset</button>}</div>
+      {state==='finished'&&<div style={{marginTop:24}}><h3>🎉 Great practice! Save your time</h3><FormField label="Category" id="studentCategory"><select id="studentCategory" style={style.input} value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option key={c}>{c}</option>)}</select></FormField><FormField label="What were you practicing?" id="studentFocus"><input id="studentFocus" maxLength={200} style={style.input} value={focus} onChange={e=>setFocus(e.target.value)}/></FormField><FormField label="Other notes" id="studentNotes"><textarea id="studentNotes" maxLength={1000} style={style.input} value={notes} onChange={e=>setNotes(e.target.value)}/></FormField><button style={style.button} disabled={busy} onClick={saveTimer}>{busy?'Saving...':'💾 Save Practice'}</button></div>}
+    </section><section style={style.card}><h2>Manual Practice Entry</h2><button style={style.secondary} onClick={()=>setManualOpen(v=>!v)}>{manualOpen?'Close Form':'+ Add Practice Time'}</button>{manualOpen&&<form onSubmit={saveManual}><FormField label="Date" id="studentDate"><input id="studentDate" type="date" required max={localDate()} style={style.input} value={entry.practice_date} onChange={e=>setEntry(p=>({...p,practice_date:e.target.value}))}/></FormField><FormField label="Minutes" id="studentMinutes"><input id="studentMinutes" type="number" required min="1" max="1440" style={style.input} value={entry.minutes} onChange={e=>setEntry(p=>({...p,minutes:e.target.value}))}/></FormField><FormField label="Category" id="studentManualCategory"><select id="studentManualCategory" style={style.input} value={entry.category} onChange={e=>setEntry(p=>({...p,category:e.target.value}))}>{categories.map(c=><option key={c}>{c}</option>)}</select></FormField><FormField label="What were you practicing?" id="studentManualFocus"><input id="studentManualFocus" maxLength={200} style={style.input} value={entry.focus} onChange={e=>setEntry(p=>({...p,focus:e.target.value}))}/></FormField><FormField label="Other notes" id="studentManualNotes"><textarea id="studentManualNotes" maxLength={1000} style={style.input} value={entry.notes} onChange={e=>setEntry(p=>({...p,notes:e.target.value}))}/></FormField><button style={style.button} disabled={busy}>{busy?'Saving...':'Save Manual Entry'}</button></form>}</section></>}
+    {tab==='log'&&<section style={style.card}><h2>📖 {student.name}'s Practice Log</h2>{sessions.length===0?<p>No sessions yet.</p>:sessions.map(s=><div key={s.id} style={{borderTop:`1px solid ${palette.border}`,padding:'12px 0'}}><strong>{s.practice_date} · {s.minutes} minutes · {s.category}</strong>{s.focus&&<p>Practiced: {s.focus}</p>}{s.notes&&<p>Other notes: {s.notes}</p>}</div>)}</section>}
+    {tab==='progress'&&<section style={style.card}><h2>🏆 Weekly Progress</h2><Progress value={total} goal={student.weekly_goal_minutes}/><p>Week of {formatDate(mondayOf())} – {formatDate(sundayOf(mondayOf()))}</p></section>}
+    </>}
   </div></main>;
 }
