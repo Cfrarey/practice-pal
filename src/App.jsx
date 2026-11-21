@@ -73,6 +73,7 @@ export default function App() {
   const [adminUnlocked,setAdminUnlocked]=useState(false),[adminConfigured,setAdminConfigured]=useState(null),[adminPassword,setAdminPassword]=useState(''),[adminConfirm,setAdminConfirm]=useState('');
   const [newInviteEmail,setNewInviteEmail]=useState(''),[newInviteFamily,setNewInviteFamily]=useState('');
   const [managedFamily,setManagedFamily]=useState(''),[managedStudents,setManagedStudents]=useState([]),[recoveryMessage,setRecoveryMessage]=useState('');
+  const [familyDetail,setFamilyDetail]=useState(null),[familyForm,setFamilyForm]=useState({}),[familyAction,setFamilyAction]=useState(''),[familySearch,setFamilySearch]=useState('');
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[authError,setAuthError]=useState('');
   const [familyId,setFamilyId]=useState(null),[familyLoading,setFamilyLoading]=useState(false),[familyError,setFamilyError]=useState('');
   const [students,setStudents]=useState([]),[sessions,setSessions]=useState([]),[dataLoading,setDataLoading]=useState(false);
@@ -490,6 +491,43 @@ export default function App() {
     if(error){setAdminError(error.message);if(/unlock|locked/i.test(error.message))setAdminUnlocked(false);}
     else setManagedStudents(data||[]);
   }
+  async function loadFamilyDetail(id){
+    if(!id){setFamilyDetail(null);return;}
+    const {data,error}=await supabase.rpc('practice_pal_admin_family_detail',{p_family_id:id});
+    if(error){setAdminError(error.message);setFamilyDetail(null);}else setFamilyDetail(data);
+  }
+  async function manageFamily(action,data={},id=managedFamily){
+    if(adminBusy)return;
+    const destructive=['archive','purge','delete_student','delete_practice','remove_member'];
+    if(destructive.includes(action)&&!window.confirm(`Confirm ${action.replaceAll('_',' ')}?`))return;
+    if(action==='purge'){
+      const family=adminData?.families?.find(f=>f.id===id);
+      const typed=window.prompt(`PERMANENT deletion removes family records and cannot be undone. Type the exact family name: ${family?.name}`);
+      if(typed!==family?.name)return;
+      data={...data,confirm:typed};
+    }
+    setAdminBusy(true);setAdminError('');setRecoveryMessage('');
+    try{
+      const {data:result,error}=await supabase.rpc('practice_pal_admin_manage_family',{p_action:action,p_family_id:action==='create'?null:id,p_data:data});
+      if(error)throw error;
+      const nextId=action==='create'?result?.id:(action==='purge'?'':id);
+      await refreshAdmin();
+      setManagedFamily(nextId||'');
+      if(nextId){await loadFamilyDetail(nextId);await selectManagedFamily(nextId);}else setFamilyDetail(null);
+      setFamilyAction('');setFamilyForm({});setRecoveryMessage(`Completed: ${action.replaceAll('_',' ')}.`);
+    }catch(err){setAdminError(err.message||String(err));if(/unlock|locked/i.test(err.message||''))setAdminUnlocked(false);}
+    finally{setAdminBusy(false);}
+  }
+  function openFamilyForm(action,record={}){setFamilyAction(action);setFamilyForm({...record});setAdminError('');}
+  async function submitFamilyForm(e){
+    e.preventDefault();
+    const a=familyAction,f=familyForm;
+    const data={...f};
+    if(['add_practice','edit_practice'].includes(a))data.minutes=Number(f.minutes);
+    if(['add_student','edit_student'].includes(a))data.weekly_goal_minutes=Number(f.weekly_goal_minutes);
+    await manageFamily(a,data);
+  }
+  async function chooseFamily(id){await selectManagedFamily(id);await loadFamilyDetail(id);}
   async function recoverAccess(kind,id,action){
     const family=adminData?.families?.find(f=>f.id===managedFamily);
     const student=managedStudents.find(s=>s.id===id);
@@ -549,11 +587,37 @@ export default function App() {
       <button style={style.button} disabled={adminBusy}>Generate activation code</button></form>
       {issuedCode&&<div role="status" style={{padding:16,border:`1px solid ${palette.border}`,borderRadius:10}}><strong>Copy this code now; it cannot be retrieved later.</strong><p style={{overflowWrap:'anywhere',fontFamily:'monospace'}}>{issuedCode}</p><button style={style.secondary} onClick={()=>navigator.clipboard.writeText(`Practice Pal: https://practice.frarey.app\nActivation code: ${issuedCode}\nRegister with the email address provided to your administrator.`)}>Copy registration instructions</button><button style={{...style.secondary,marginLeft:8}} onClick={()=>setIssuedCode('')}>Hide code</button></div>}
       {adminError&&<p role="alert" style={{color:palette.red}}>{adminError}</p>}
-    </section><section style={style.card}><h2>Families</h2><button style={style.secondary} onClick={refreshAdmin}>Refresh</button>
-      {(adminData?.families||[]).map(f=><p key={f.id}><strong>{f.name}</strong> — {f.members} member(s), {f.students} student(s)</p>)}
+    </section><section style={style.card}><h2>Family Management</h2>
+      <p>Create, edit, archive and restore families. Archived families are blocked from parent and student data access. Permanent deletion is available only after archiving.</p>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}><button type="button" style={style.button} disabled={adminBusy} onClick={()=>openFamilyForm('create')}>+ Create Family</button><button type="button" style={style.secondary} onClick={refreshAdmin}>Refresh</button></div>
+      <input aria-label="Search families" placeholder="Search family name" style={style.input} value={familySearch} onChange={e=>setFamilySearch(e.target.value)}/>
+      {(adminData?.families||[]).filter(f=>f.name.toLowerCase().includes(familySearch.toLowerCase())).map(f=><div key={f.id} style={{padding:'10px 0',borderBottom:`1px solid ${palette.border}`}}><strong>{f.name}</strong> — {f.members} member(s), {f.students} student(s) — {f.archived_at?'Archived':'Active'} <button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>chooseFamily(f.id)}>Manage</button></div>)}
+      {managedFamily&&familyDetail&&<div style={{background:palette.bg,padding:16,borderRadius:12,marginTop:16}}>
+        <h3>{familyDetail.family.name} {familyDetail.family.archived_at?'(Archived)':''}</h3>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>openFamilyForm('rename',{name:familyDetail.family.name})}>Rename</button>
+          {!familyDetail.family.archived_at?<button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>manageFamily('archive')}>Archive Family</button>:<><button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>manageFamily('restore')}>Restore Family</button><button type="button" disabled={adminBusy} style={{...style.secondary,color:palette.red}} onClick={()=>manageFamily('purge')}>Permanently Delete</button></>}
+        </div>
+        <h4>Parents and owners</h4>
+        {(familyDetail.members||[]).map(m=><div key={m.id} style={{padding:'8px 0'}}>{m.email} — {m.role} <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>manageFamily('set_member_role',{user_id:m.user_id,role:m.role==='owner'?'parent':'owner'})}>Change Role</button> <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>manageFamily('remove_member',{user_id:m.user_id})}>Remove</button></div>)}
+        <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>openFamilyForm('add_member',{email:'',role:'parent'})}>+ Add Registered Parent</button>
+        <h4>Students</h4>
+        {(familyDetail.students||[]).map(s=><div key={s.id} style={{padding:'8px 0'}}>{s.name} — {s.instrument}, goal {s.weekly_goal_minutes} min <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>openFamilyForm('edit_student',s)}>Edit</button> <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>manageFamily('delete_student',{id:s.id})}>Delete</button></div>)}
+        <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>openFamilyForm('add_student',{name:'',instrument:'Piano',weekly_goal_minutes:60})}>+ Add Student</button>
+        <h4>Practice records (250 most recent)</h4>
+        {(familyDetail.sessions||[]).map(p=><div key={p.id} style={{padding:'8px 0'}}>{p.practice_date} — {(familyDetail.students||[]).find(s=>s.id===p.student_id)?.name||'Student'} — {p.minutes} min <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>openFamilyForm('edit_practice',p)}>Edit</button> <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at} style={style.secondary} onClick={()=>manageFamily('delete_practice',{id:p.id})}>Delete</button></div>)}
+        <button type="button" disabled={adminBusy||!!familyDetail.family.archived_at||!familyDetail.students?.length} style={style.secondary} onClick={()=>openFamilyForm('add_practice',{student_id:familyDetail.students[0].id,practice_date:localDate(),minutes:15,category:'Other',focus:'',notes:'',teacher_notes:''})}>+ Add Practice Record</button>
+      </div>}
+      {familyAction&&<form onSubmit={submitFamilyForm} style={{border:`1px solid ${palette.border}`,padding:16,borderRadius:12,marginTop:12}}><h3>{familyAction.replaceAll('_',' ')}</h3>
+        {['create','rename','add_student','edit_student'].includes(familyAction)&&<FormField id="fmName" label="Name"><input id="fmName" required style={style.input} value={familyForm.name||''} onChange={e=>setFamilyForm(p=>({...p,name:e.target.value}))}/></FormField>}
+        {['add_student','edit_student'].includes(familyAction)&&<><FormField id="fmInstrument" label="Instrument"><input id="fmInstrument" required style={style.input} value={familyForm.instrument||''} onChange={e=>setFamilyForm(p=>({...p,instrument:e.target.value}))}/></FormField><FormField id="fmGoal" label="Weekly goal minutes"><input id="fmGoal" required type="number" min="0" max="10080" style={style.input} value={familyForm.weekly_goal_minutes??60} onChange={e=>setFamilyForm(p=>({...p,weekly_goal_minutes:e.target.value}))}/></FormField></>}
+        {familyAction==='add_member'&&<><FormField id="fmEmail" label="Existing verified account email"><input id="fmEmail" type="email" required style={style.input} value={familyForm.email||''} onChange={e=>setFamilyForm(p=>({...p,email:e.target.value}))}/></FormField><FormField id="fmRole" label="Role"><select id="fmRole" style={style.input} value={familyForm.role||'parent'} onChange={e=>setFamilyForm(p=>({...p,role:e.target.value}))}><option value="parent">Parent</option><option value="owner">Owner</option></select></FormField></>}
+        {['add_practice','edit_practice'].includes(familyAction)&&<><FormField id="fmStudent" label="Student"><select id="fmStudent" required style={style.input} value={familyForm.student_id||''} onChange={e=>setFamilyForm(p=>({...p,student_id:e.target.value}))}>{(familyDetail?.students||[]).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></FormField><FormField id="fmDate" label="Practice date"><input id="fmDate" type="date" required style={style.input} value={familyForm.practice_date||''} onChange={e=>setFamilyForm(p=>({...p,practice_date:e.target.value}))}/></FormField><FormField id="fmMinutes" label="Minutes"><input id="fmMinutes" type="number" min="1" max="1440" required style={style.input} value={familyForm.minutes||''} onChange={e=>setFamilyForm(p=>({...p,minutes:e.target.value}))}/></FormField>{['category','focus','notes','teacher_notes'].map(field=><FormField key={field} id={'fm'+field} label={field.replaceAll('_',' ')}><input id={'fm'+field} style={style.input} value={familyForm[field]||''} onChange={e=>setFamilyForm(p=>({...p,[field]:e.target.value}))}/></FormField>)}</>}
+        <button type="submit" disabled={adminBusy} style={style.button}>Save</button> <button type="button" style={style.secondary} onClick={()=>setFamilyAction('')}>Cancel</button>
+      </form>}
     </section><section style={style.card}><h2>Family Account Recovery</h2>
       <p>Recovery actions are audited and require your separate Platform Admin unlock. Parent Mode passwords and student PINs are never displayed.</p>
-      <FormField id="managedFamily" label="Select family"><select id="managedFamily" style={style.input} value={managedFamily} onChange={e=>selectManagedFamily(e.target.value)}><option value="">Choose a family</option>{(adminData?.families||[]).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></FormField>
+      <FormField id="managedFamily" label="Select family"><select id="managedFamily" style={style.input} value={managedFamily} onChange={e=>chooseFamily(e.target.value)}><option value="">Choose a family</option>{(adminData?.families||[]).map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></FormField>
       {managedFamily&&<><h3>Parent Mode</h3><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         <button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>recoverAccess('parent',managedFamily,'clear_lockout')}>Clear Parent Lockout</button>
         <button type="button" disabled={adminBusy} style={style.secondary} onClick={()=>recoverAccess('parent',managedFamily,'require_new_password')}>Reset Parent Password</button>
